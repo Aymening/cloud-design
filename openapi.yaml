@@ -1,0 +1,383 @@
+openapi: 3.0.3
+
+info:
+  title: CRUD Microservices API Gateway
+  version: 1.0.0
+  description: |
+    Public HTTP interface for movie inventory operations and asynchronous
+    billing message submission. Movie requests are forwarded to the Inventory
+    API, while billing requests are published to RabbitMQ.
+
+servers:
+  - url: http://localhost:3000
+    description: Public API Gateway endpoint exposed by Docker Compose
+
+tags:
+  - name: Movies
+    description: Movie inventory operations forwarded to the Inventory API
+  - name: Billing
+    description: Asynchronous billing message submission
+
+paths:
+  /api/movies:
+    get:
+      tags:
+        - Movies
+      summary: List movies
+      description: |
+        Returns every movie. When `title` is provided, only movies whose title
+        contains the supplied value are returned. Matching is case-insensitive.
+        The endpoint also accepts a trailing slash.
+      operationId: listMovies
+      parameters:
+        - name: title
+          in: query
+          required: false
+          description: Case-insensitive text to search for within movie titles.
+          schema:
+            type: string
+          example: matrix
+      responses:
+        "200":
+          description: Movies returned successfully.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Movie"
+              example:
+                - id: 1
+                  title: The Matrix
+                  description: A science-fiction movie.
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/InventoryUnavailable"
+
+    post:
+      tags:
+        - Movies
+      summary: Create a movie
+      description: Creates and persists a new movie. The endpoint also accepts a trailing slash.
+      operationId: createMovie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MovieCreate"
+            example:
+              title: A new movie
+              description: Very short description
+      responses:
+        "201":
+          description: Movie created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Movie"
+              example:
+                id: 1
+                title: A new movie
+                description: Very short description
+        "400":
+          description: The request body is missing or does not contain a title.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: Movie title is required
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/InventoryUnavailable"
+
+    delete:
+      tags:
+        - Movies
+      summary: Delete all movies
+      description: Deletes every movie stored by the Inventory API. The endpoint also accepts a trailing slash.
+      operationId: deleteAllMovies
+      responses:
+        "200":
+          description: All movies deleted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+              example:
+                message: Successfully deleted all 2 movies.
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/InventoryUnavailable"
+
+  /api/movies/{id}:
+    parameters:
+      - $ref: "#/components/parameters/MovieId"
+
+    get:
+      tags:
+        - Movies
+      summary: Retrieve a movie
+      description: Returns one movie by ID. The endpoint also accepts a trailing slash.
+      operationId: getMovieById
+      responses:
+        "200":
+          description: Movie returned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Movie"
+        "404":
+          $ref: "#/components/responses/MovieNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/InventoryUnavailable"
+
+    put:
+      tags:
+        - Movies
+      summary: Update a movie
+      description: |
+        Updates the supplied fields of an existing movie. At least one JSON
+        property must be supplied. The endpoint also accepts a trailing slash.
+      operationId: updateMovie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MovieUpdate"
+            example:
+              title: Updated movie title
+              description: Updated description
+      responses:
+        "200":
+          description: Movie updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Movie"
+        "400":
+          description: The request body is empty or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: Invalid payload
+        "404":
+          $ref: "#/components/responses/MovieNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/InventoryUnavailable"
+
+    delete:
+      tags:
+        - Movies
+      summary: Delete a movie
+      description: Deletes one movie by ID. The endpoint also accepts a trailing slash.
+      operationId: deleteMovieById
+      responses:
+        "200":
+          description: Movie deleted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+              example:
+                message: Movie with ID 1 deleted successfully.
+        "404":
+          $ref: "#/components/responses/MovieNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/InventoryUnavailable"
+
+  /api/billing:
+    post:
+      tags:
+        - Billing
+      summary: Queue a billing order
+      description: |
+        Validates the presence of the required fields and publishes the order
+        to the durable RabbitMQ billing queue. Processing is asynchronous, so
+        this operation does not return a stored order. The endpoint also
+        accepts a trailing slash.
+      operationId: queueBillingOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BillingOrder"
+            example:
+              user_id: 20
+              number_of_items: 99
+              total_amount: 250
+      responses:
+        "200":
+          description: Billing message published successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+              example:
+                message: Message posted
+        "400":
+          description: The body is not JSON or a required field is missing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                wrongContentType:
+                  value:
+                    error: Content-Type must be application/json
+                missingFields:
+                  value:
+                    error: "Missing required fields: total_amount"
+        "503":
+          description: The Gateway could not publish the message to RabbitMQ.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: Failed to queue billing transaction
+                details: RabbitMQ connection failed
+
+components:
+  parameters:
+    MovieId:
+      name: id
+      in: path
+      required: true
+      description: Numeric identifier of the movie.
+      schema:
+        type: integer
+        minimum: 1
+      example: 1
+
+  schemas:
+    Movie:
+      type: object
+      required:
+        - id
+        - title
+        - description
+      properties:
+        id:
+          type: integer
+          readOnly: true
+          example: 1
+        title:
+          type: string
+          maxLength: 255
+          example: A new movie
+        description:
+          type: string
+          nullable: true
+          example: Very short description
+
+    MovieCreate:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          maxLength: 255
+          example: A new movie
+        description:
+          type: string
+          nullable: true
+          default: ""
+          example: Very short description
+
+    MovieUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          maxLength: 255
+          example: Updated movie title
+        description:
+          type: string
+          nullable: true
+          example: Updated description
+
+    BillingOrder:
+      type: object
+      required:
+        - user_id
+        - number_of_items
+        - total_amount
+      properties:
+        user_id:
+          oneOf:
+            - type: integer
+            - type: string
+          example: 20
+        number_of_items:
+          oneOf:
+            - type: integer
+            - type: string
+          example: 99
+        total_amount:
+          oneOf:
+            - type: number
+              format: double
+            - type: string
+          example: 250
+
+    Message:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+        details:
+          type: string
+
+  responses:
+    MovieNotFound:
+      description: No movie exists with the supplied ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Movie not found
+
+    InternalError:
+      description: The Inventory API encountered an internal error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    InventoryUnavailable:
+      description: The Gateway could not contact the Inventory API.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Inventory service unavailable
+            details: Connection to the Inventory API failed
