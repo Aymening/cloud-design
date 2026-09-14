@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars and adjust as needed, then run:
+#   terraform init
+#   terraform plan -var-file=terraform.tfvars
+#   terraform apply -var-file=terraform.tfvars
+
+aws_region   = "eu-west-3"
+project_name = "cloud-design"
+
+vpc_cidr = "10.0.0.0/16"
+
+availability_zones = ["eu-west-3a", "eu-west-3b"]
+
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24"]
