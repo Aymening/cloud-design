@@ -42,6 +42,8 @@ their decisions, and keeping cost in check (destroy/stop idle resources).
 | 9 | **Auto-scaling & load testing** | Define auto-scaling policies (target tracking or step scaling) for the app services, and run load tests to validate scale-out/scale-in behavior and tune thresholds. | Terraform auto-scaling config; load test scripts/results; before/after scaling behavior notes. |
 | 10 | **Architecture documentation & diagrams** | Produce the overall architecture diagram(s) tying every component together, write the design-decision rationale (scalability, availability, security, cost, simplicity trade-offs), and assemble the final setup/usage guide. | Architecture diagrams; design rationale section; prerequisites/setup/usage instructions. |
 
+`FIGHTING AND BE HAPPY`
+
 ## Notes
 
 - Each task owner provisions their resources via Terraform in their own
