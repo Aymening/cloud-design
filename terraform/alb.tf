@@ -5,37 +5,35 @@ resource "aws_lb" "main" {
   load_balancer_type = "application"
   security_groups    = [var.alb_security_group_id]
   subnets            = var.public_subnet_ids
-
-  tags = {
-    Environment = "production"
-    Project     = "cloud-design"
-  }
 }
 
-# Target Group for API Gateway App (Port 3000)
+# Target Group for API Gateway Service
 resource "aws_lb_target_group" "api_gateway" {
-  name        = "tg-api-gateway"
+  name        = "api-gateway-tg"
   port        = 3000
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
-  target_type = "ip" # Required for ECS Fargate awsvpc network mode
+  target_type = "ip"
 
   health_check {
     path                = "/health"
     protocol            = "HTTP"
-    matcher             = "200-399"
+    port                = "3000"
     interval            = 30
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 3
+    matcher             = "200"
   }
 }
 
-# ALB Listener on HTTP Port 80
-resource "aws_lb_listener" "http" {
+# Subtask 8.2: HTTPS Listener (Port 443) using ACM Certificate
+resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.main.arn
-  port              = 80
-  protocol          = "HTTP"
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = aws_acm_certificate.app_cert.arn
 
   default_action {
     type             = "forward"
@@ -43,8 +41,19 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Output Load Balancer DNS Name
-output "alb_dns_name" {
-  description = "Public DNS name of the Load Balancer"
-  value       = aws_lb.main.dns_name
+# HTTP Listener (Port 80) - Redirects to HTTPS
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type = "redirect"
+
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
 }

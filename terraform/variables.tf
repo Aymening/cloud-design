@@ -54,3 +54,9 @@ variable "billing_app_image" {
   description = "ECR image URI for billing-app (Port 8080)"
   default     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/billing-app:latest"
 }
+
+variable "domain_name" {
+  type        = string
+  description = "Domain name for the ACM SSL Certificate"
+  default     = "example.com" # Replace with your actual domain name
+}

@@ -12,7 +12,9 @@ provider "aws" {
   region = var.aws_region
 }
 
-# IAM Role assumed by the ECS Container Agent to execute tasks
+# -----------------------------------------------------------------------------
+# Base IAM Role for ECS Task Execution
+# -----------------------------------------------------------------------------
 resource "aws_iam_role" "ecs_execution_role" {
   name = "cloud-design-ecs-execution-role"
 
