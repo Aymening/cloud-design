@@ -19,7 +19,11 @@ resource "aws_ecs_task_definition" "api_gateway_app" {
           containerPort = 3000
           hostPort      = 3000
           protocol      = "tcp"
-        }  ²
+        }
+      ]
+      secrets = [
+        {
+          name      = "DB_PASSWORD"
           valueFrom = "${aws_secretsmanager_secret.db_credentials.arn}:password::"
         },
         {
