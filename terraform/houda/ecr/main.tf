@@ -7,10 +7,6 @@ resource "aws_ecr_repository" "this" {
   image_tag_mutability = "MUTABLE"
   force_delete         = true
 
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
   encryption_configuration {
     encryption_type = "AES256"
   }
@@ -42,4 +38,32 @@ resource "aws_ecr_lifecycle_policy" "this" {
       }
     ]
   })
+}
+
+# -----------------------------------------------------------------------------
+# Vulnerability scanning with Amazon Inspector
+# -----------------------------------------------------------------------------
+# Enhanced scanning: Inspector scans each image when it is pushed, then keeps
+# re-checking it and reports new findings whenever a vulnerability affecting
+# its packages is published, instead of scanning only once at push time.
+data "aws_caller_identity" "current" {}
+
+resource "aws_inspector2_enabler" "ecr" {
+  account_ids    = [data.aws_caller_identity.current.account_id]
+  resource_types = ["ECR"]
+}
+
+resource "aws_ecr_registry_scanning_configuration" "this" {
+  scan_type = "ENHANCED"
+
+  rule {
+    scan_frequency = "CONTINUOUS_SCAN"
+
+    repository_filter {
+      filter      = "${var.project_name}/*"
+      filter_type = "WILDCARD"
+    }
+  }
+
+  depends_on = [aws_inspector2_enabler.ecr]
 }
