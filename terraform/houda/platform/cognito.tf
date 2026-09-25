@@ -1,24 +1,8 @@
-# -----------------------------------------------------------------------------
-# ACM Certificate for SSL/TLS
-# -----------------------------------------------------------------------------
-resource "aws_acm_certificate" "app_cert" {
-  domain_name       = var.domain_name
-  validation_method = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-
-  tags = {
-    Name = "app-acm-certificate"
-  }
-}
-
-# -----------------------------------------------------------------------------
-# Cognito User Pool and Client
-# -----------------------------------------------------------------------------
+# Cognito issues the tokens that protect the public /api/* endpoints.
+# api-gateway-app verifies them itself (signature, expiry, issuer, client id)
+# before proxying; /health stays open for the load balancer's health checks.
 resource "aws_cognito_user_pool" "main" {
-  name = "app-user-pool"
+  name = "${var.project_name}-users"
 
   username_attributes      = ["email"]
   auto_verified_attributes = ["email"]
@@ -30,72 +14,79 @@ resource "aws_cognito_user_pool" "main" {
     require_symbols   = true
     require_uppercase = true
   }
+
+  account_recovery_setting {
+    recovery_mechanism {
+      name     = "verified_email"
+      priority = 1
+    }
+  }
 }
 
+# Public client (no secret): tokens are fetched from the CLI or scripts with
+# USER_PASSWORD_AUTH, see scripts/get-token.sh.
 resource "aws_cognito_user_pool_client" "main" {
-  name         = "app-user-pool-client"
+  name         = "${var.project_name}-api-client"
   user_pool_id = aws_cognito_user_pool.main.id
 
-  generate_secret     = false
+  generate_secret = false
   explicit_auth_flows = [
     "ALLOW_USER_PASSWORD_AUTH",
     "ALLOW_REFRESH_TOKEN_AUTH",
-    "ALLOW_USER_SRP_AUTH"
+    "ALLOW_USER_SRP_AUTH",
   ]
+
+  prevent_user_existence_errors = "ENABLED"
+  access_token_validity         = 60
+  id_token_validity             = 60
+  refresh_token_validity        = 1
+
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "days"
+  }
 }
 
 # -----------------------------------------------------------------------------
-# Secrets Manager for Database Credentials
+# Test user for smoke and load tests
 # -----------------------------------------------------------------------------
-resource "aws_secretsmanager_secret" "db_credentials" {
-  name        = "app/production/db-credentials"
-  description = "Database credentials for the application"
+# The password is generated, never written in the repo, and handed out only
+# through Secrets Manager.
+resource "random_password" "test_user" {
+  length           = 20
+  min_upper        = 1
+  min_lower        = 1
+  min_numeric      = 1
+  min_special      = 1
+  override_special = "!#%*()-_=+[]{}:?"
 }
 
-resource "aws_secretsmanager_secret_version" "db_credentials" {
-  secret_id = aws_secretsmanager_secret.db_credentials.id
+resource "aws_cognito_user" "test" {
+  user_pool_id   = aws_cognito_user_pool.main.id
+  username       = var.test_user_email
+  password       = random_password.test_user.result
+  message_action = "SUPPRESS"
+
+  attributes = {
+    email          = var.test_user_email
+    email_verified = "true"
+  }
+}
+
+# recovery_window_in_days = 0 so destroy + apply during testing can reuse the
+# same secret name immediately instead of waiting out the default 30 days.
+resource "aws_secretsmanager_secret" "test_user" {
+  name                    = "${var.project_name}/cognito-test-user"
+  description             = "Credentials of the Cognito test user used by scripts/get-token.sh"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "test_user" {
+  secret_id = aws_secretsmanager_secret.test_user.id
   secret_string = jsonencode({
-    username = "db_user"
-    password = "ReplaceWithSecurePassword123!"
-    engine   = "postgres"
-    host     = "db.local"
-    port     = 5432
-    dbname   = "appdb"
+    username  = var.test_user_email
+    password  = random_password.test_user.result
+    client_id = aws_cognito_user_pool_client.main.id
   })
-}
-
-# -----------------------------------------------------------------------------
-# Scoped IAM Execution Role for ECS
-# -----------------------------------------------------------------------------
-
-# Attachment for default AWS managed policy (ECR pull & CloudWatch logging)
-resource "aws_iam_role_policy_attachment" "ecs_execution_role_policy" {
-  role       = aws_iam_role.ecs_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-# Scoped Inline Policy for Secrets Manager Access
-resource "aws_iam_policy" "ecs_secrets_policy" {
-  name        = "ecs-secrets-policy"
-  description = "Allows ECS tasks to read database secrets from Secrets Manager"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue"
-        ]
-        Resource = [
-          aws_secretsmanager_secret.db_credentials.arn
-        ]
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_secrets_attach" {
-  role       = aws_iam_role.ecs_execution_role.name
-  policy_arn = aws_iam_policy.ecs_secrets_policy.arn
 }
