@@ -1,0 +1,28 @@
+services:
+  inventory-db:
+    build:
+      context: .
+      dockerfile: Dockerfiles/inventory-db/Dockerfile
+    environment:
+      POSTGRES_USER: ${INVENTORY_DB_USER}
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD}
+      POSTGRES_DB: ${INVENTORY_DB_NAME}
+    volumes:
+      - inventory_db_data:/var/lib/postgresql/data
+
+  inventory-app:
+    build:
+      context: .
+      dockerfile: Dockerfiles/inventory-app/Dockerfile
+    env_file: .env
+    environment:
+      INVENTORY_DB_HOST: inventory-db
+      INVENTORY_DB_PORT: "5432"
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+
+volumes:
+  inventory_db_data:
