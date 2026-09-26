@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars and adjust as needed, then run:
+#   terraform init
+#   terraform plan -var-file=terraform.tfvars
+#   terraform apply -var-file=terraform.tfvars
+#
+# Requires the networking module (../01-networking) to already be applied,
+# since this module reads its state to find the VPC/subnets/security group.
+
+aws_region   = "eu-west-3"
+project_name = "cloud-design"
+
+engine_version    = "16.4"
+instance_class    = "db.t4g.micro"
+allocated_storage = 20
+
+backup_retention_period = 7
+multi_az                = false
+
+inventory_db_name = "movies_db"
+billing_db_name   = "billing_db"
+db_username       = "appuser"
