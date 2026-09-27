@@ -23,6 +23,11 @@ services:
         condition: service_healthy
     ports:
       - "8081:8080"
+    # inventory-db's first-boot init script briefly restarts its own
+    # postgres process; the very first connection can lose that race even
+    # though the healthcheck already passed. Self-heal instead of chasing
+    # startup-order timing further.
+    restart: on-failure:5
 
   billing-db:
     build:
@@ -60,6 +65,8 @@ services:
         condition: service_healthy
     ports:
       - "8082:8080"
+    # same first-boot race as inventory-app, against billing-db/rabbit-queue.
+    restart: on-failure:5
 
 volumes:
   inventory_db_data:
