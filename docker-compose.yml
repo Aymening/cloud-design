@@ -24,5 +24,43 @@ services:
     ports:
       - "8081:8080"
 
+  billing-db:
+    build:
+      context: .
+      dockerfile: Dockerfiles/billing-db/Dockerfile
+    environment:
+      POSTGRES_USER: ${BILLING_DB_USER}
+      POSTGRES_PASSWORD: ${BILLING_DB_PASSWORD}
+      POSTGRES_DB: ${BILLING_DB_NAME}
+    volumes:
+      - billing_db_data:/var/lib/postgresql/data
+
+  rabbit-queue:
+    build:
+      context: .
+      dockerfile: Dockerfiles/rabbit-queue/Dockerfile
+    env_file: .env
+    ports:
+      - "5672:5672"
+
+  billing-app:
+    build:
+      context: .
+      dockerfile: Dockerfiles/billing-app/Dockerfile
+    env_file: .env
+    environment:
+      BILLING_DB_HOST: billing-db
+      BILLING_DB_PORT: "5432"
+      RABBITMQ_HOST: rabbit-queue
+      RABBITMQ_PORT: "5672"
+    depends_on:
+      billing-db:
+        condition: service_healthy
+      rabbit-queue:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+
 volumes:
   inventory_db_data:
+  billing_db_data:
