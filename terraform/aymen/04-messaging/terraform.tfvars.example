@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars and adjust as needed, then run:
+#   terraform init
+#   terraform plan -var-file=terraform.tfvars
+#   terraform apply -var-file=terraform.tfvars
+#
+# Requires the networking module (../01-networking) to already be applied.
+
+aws_region   = "eu-west-3"
+project_name = "cloud-design"
+
+rabbitmq_username = "app_user"
+rabbitmq_queue    = "billing_queue"
+
+cpu    = 256
+memory = 512
+
+# Set once rabbit-queue's image is pushed to ECR (task 6):
+# container_image = "<account-id>.dkr.ecr.eu-west-3.amazonaws.com/rabbit-queue:latest"
+container_image = "rabbit-queue:latest"
