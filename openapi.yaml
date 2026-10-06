@@ -9,8 +9,17 @@ info:
     API, while billing requests are published to RabbitMQ.
 
 servers:
-  - url: http://localhost:3000
-    description: Public API Gateway endpoint exposed by Docker Compose
+  - url: https://{host}
+    description: >-
+      API Gateway behind the AWS load balancer. Get the address with
+      `terraform -chdir=terraform/houda/platform output -raw app_url`.
+    variables:
+      host:
+        default: cloud-design-alb.eu-west-3.elb.amazonaws.com
+
+# Every /api/* route needs a Cognito access token (scripts/get-token.sh).
+security:
+  - cognitoAccessToken: []
 
 tags:
   - name: Movies
@@ -253,6 +262,15 @@ paths:
                 details: RabbitMQ connection failed
 
 components:
+  securitySchemes:
+    cognitoAccessToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Access token of a user of the Cognito user pool. Requests without a
+        valid token get 401.
+
   parameters:
     MovieId:
       name: id

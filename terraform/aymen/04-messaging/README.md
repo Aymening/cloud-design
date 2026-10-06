@@ -23,8 +23,10 @@ topology (single durable queue, default exchange, manual ack/nack).
   needs the networking module (VPC/subnets/security groups) to apply; it
   doesn't need the cluster to exist yet, since IAM roles and task
   definitions aren't tied to any specific cluster.
-- No `rabbit-queue` image in ECR yet - `container_image` defaults to a
-  placeholder; update it once task 6 pushes the image.
+- No image repository - the `rabbit-queue` image is pushed to the ECR
+  repository from `terraform/houda/ecr` and passed in with
+  `-var "container_image=..."` (step 4 of the main README's Deploying
+  section).
 
 ## Usage
 
