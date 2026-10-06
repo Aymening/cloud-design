@@ -104,30 +104,38 @@ def start_consumer():
         heartbeat=600
     )
 
+    # Connect, and reconnect whenever the connection is lost (RabbitMQ not
+    # started yet, restarted or replaced). A message that wasn't acked goes
+    # back to the queue, so no order is lost in between. While disconnected,
+    # /health answers 503: if RabbitMQ stays away, ECS replaces the task.
     while True:
+        connection = None
         try:
             connection = pika.BlockingConnection(parameters)
-            break
-        except pika.exceptions.AMQPConnectionError:
-            print(" [!] RabbitMQ not ready yet, retrying in 5 seconds...")
-            time.sleep(5)
+            channel = connection.channel()
+            channel.queue_declare(queue=RABBITMQ_QUEUE, durable=True)
 
-    channel = connection.channel()
-    channel.queue_declare(queue=RABBITMQ_QUEUE, durable=True)
+            channel.basic_qos(prefetch_count=1)
 
-    channel.basic_qos(prefetch_count=1)
+            channel.basic_consume(
+                queue=RABBITMQ_QUEUE,
+                on_message_callback=process_message,
+                auto_ack=False
+            )
 
-    channel.basic_consume(
-        queue=RABBITMQ_QUEUE,
-        on_message_callback=process_message,
-        auto_ack=False
-    )
-
-    SERVICE_READY = True
-    print(f" [*] Billing API service started. Waiting for messages in '{RABBITMQ_QUEUE}'...")
-    try:
-        channel.start_consuming()
-    except KeyboardInterrupt:
-        print(" [x] Stopping Billing Consumer...")
-        channel.stop_consuming()
-        connection.close()
+            SERVICE_READY = True
+            print(f" [*] Billing API service started. Waiting for messages in '{RABBITMQ_QUEUE}'...")
+            channel.start_consuming()
+        except pika.exceptions.AMQPError as error:
+            SERVICE_READY = False
+            print(f" [!] RabbitMQ not reachable ({error!r}), retrying in 5 seconds...")
+        except KeyboardInterrupt:
+            print(" [x] Stopping Billing Consumer...")
+            return
+        finally:
+            if connection and connection.is_open:
+                try:
+                    connection.close()
+                except pika.exceptions.AMQPError:
+                    pass
+        time.sleep(5)

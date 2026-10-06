@@ -12,7 +12,9 @@ FROM python:3.12-slim-trixie
 
 RUN useradd --create-home appuser
 
-ENV PATH=/opt/venv/bin:$PATH
+# billing-app logs with print(): unbuffered, orders show up in the logs at once.
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
