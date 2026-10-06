@@ -20,10 +20,10 @@ output "billing_db_secret_arn" {
 
 output "inventory_db_identifier" {
   description = "RDS instance identifier for inventory-db (needed for CloudWatch alarm dimensions)"
-  value       = aws_db_instance.inventory_db.id
+  value       = aws_db_instance.inventory_db.identifier
 }
 
 output "billing_db_identifier" {
   description = "RDS instance identifier for billing-db (needed for CloudWatch alarm dimensions)"
-  value       = aws_db_instance.billing_db.id
+  value       = aws_db_instance.billing_db.identifier
 }

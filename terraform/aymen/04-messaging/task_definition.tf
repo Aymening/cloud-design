@@ -49,6 +49,18 @@ resource "aws_ecs_task_definition" "rabbit_queue" {
         { name = "RABBITMQ_QUEUE", valueFrom = "${aws_secretsmanager_secret.rabbitmq.arn}:queue::" },
       ]
 
+      # ECS ignores the Dockerfile HEALTHCHECK. This one only checks that
+      # RabbitMQ accepts connections on 5672 (bash's /dev/tcp, no extra
+      # tools), so it doesn't depend on the node name resolving like
+      # rabbitmq-diagnostics does. ECS replaces the task if it stops.
+      healthCheck = {
+        command     = ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/5672' || exit 1"]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 120
+      }
+
       logConfiguration = {
         logDriver = "awslogs"
         options = {
