@@ -551,6 +551,9 @@ aws inspector2 list-findings --sort-criteria field=SEVERITY,sortOrder=DESC \
   --query 'findings[].[resources[0].details.awsEcrContainerImage.repositoryName,severity,title]' --output table
 ```
 
+`scripts/push-images.sh` pushes plain images (not an image index), because
+Inspector can only scan those: otherwise the `latest` tag shows no findings.
+
 When a finding has a fixed version, update the package (in the service's
 `requirements.txt` or its Dockerfile) and push the image again: Inspector
 scans the new image automatically. Findings in Debian base packages that
