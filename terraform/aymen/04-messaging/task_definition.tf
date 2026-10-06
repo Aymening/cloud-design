@@ -29,6 +29,10 @@ resource "aws_ecs_task_definition" "rabbit_queue" {
       name      = "rabbit-queue"
       image     = var.container_image
       essential = true
+      # No hostname override here - ECS rejects it for networkMode=awsvpc
+      # (Fargate). The Dockerfile's RABBITMQ_NODENAME is set to rabbit@localhost
+      # instead, which always resolves regardless of the container's actual
+      # hostname (see Dockerfiles/rabbit-queue/Dockerfile for why).
 
       portMappings = [
         {
