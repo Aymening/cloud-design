@@ -23,3 +23,5 @@ terraform.rc
 # Editors
 .vscode/
 .idea/
+*.tfplan
+tfplan
