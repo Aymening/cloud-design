@@ -14,8 +14,23 @@ data "terraform_remote_state" "messaging" {
   }
 }
 
+# The platform module (ECS cluster, services, load balancer) gives the app
+# metrics shown on the dashboard and used by app_alarms.tf.
+data "terraform_remote_state" "platform" {
+  backend = "local"
+  config = {
+    path = "${path.module}/../../houda/platform/terraform.tfstate"
+  }
+}
+
 locals {
   inventory_db_identifier = data.terraform_remote_state.databases.outputs.inventory_db_identifier
   billing_db_identifier   = data.terraform_remote_state.databases.outputs.billing_db_identifier
   rabbitmq_log_group_name = data.terraform_remote_state.messaging.outputs.log_group_name
+
+  cluster_name                = data.terraform_remote_state.platform.outputs.cluster_name
+  service_names               = data.terraform_remote_state.platform.outputs.service_names
+  app_log_group_name          = data.terraform_remote_state.platform.outputs.log_group_name
+  alb_arn_suffix              = data.terraform_remote_state.platform.outputs.alb_arn_suffix
+  gateway_target_group_suffix = data.terraform_remote_state.platform.outputs.api_gateway_target_group_arn_suffix
 }

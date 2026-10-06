@@ -3,9 +3,10 @@
 #   terraform plan -var-file=terraform.tfvars
 #   terraform apply -var-file=terraform.tfvars
 #
-# Requires the databases module (../02-databases) and the messaging module
-# (../04-messaging) to already be applied, since this module reads their
-# state to find the RDS instances and the log group.
+# Requires the databases module (../02-databases), the messaging module
+# (../04-messaging) and the platform module (../../houda/platform) to already
+# be applied, since this module reads their state to find the RDS instances,
+# the log groups, the ECS services and the load balancer.
 
 aws_region   = "eu-west-3"
 project_name = "cloud-design"
@@ -15,3 +16,4 @@ alert_email = "you@example.com" # AWS emails a confirmation link here after appl
 db_cpu_threshold_percent        = 80
 db_free_storage_threshold_bytes = 2000000000
 db_connections_threshold        = 50
+app_5xx_threshold               = 10
