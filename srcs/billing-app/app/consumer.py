@@ -6,7 +6,7 @@ from threading import Thread
 
 import pika
 from flask import Flask, jsonify
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from app.database import SessionLocal, Base, engine
 from app.models import Order
 
@@ -73,6 +73,14 @@ def process_message(ch, method, _properties, body):
         print(" [✓] Order successfully inserted into orders table.")
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
+
+    except OperationalError as error:
+        # billing-db can't be reached: put the order back in the queue and
+        # wait before the next try, so no order is lost while it is down.
+        print(f" [!] Billing database unavailable: {error}; order requeued, retrying in 5 seconds...", flush=True)
+        session.rollback()
+        time.sleep(5)
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
     except Exception as error:
         print(f" [!] Error processing message: {error}", flush=True)
