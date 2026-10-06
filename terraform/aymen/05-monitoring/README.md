@@ -60,7 +60,8 @@ need to be applied first:
 
 ```bash
 cd ../02-databases && terraform apply -var-file=terraform.tfvars
-cd ../04-messaging  && terraform apply -var-file=terraform.tfvars
+cd ../04-messaging  && terraform apply -var-file=terraform.tfvars \
+  -var "container_image=$(terraform -chdir=../../houda/ecr output -raw rabbit_queue_image)"
 cd ../../houda/platform && terraform apply -var-file=terraform.tfvars
 cd ../../aymen/05-monitoring && terraform apply -var-file=terraform.tfvars
 ```

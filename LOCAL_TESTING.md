@@ -1,7 +1,9 @@
 # Local testing (Task 3: containerize inventory-app & billing-app)
 
-`docker-compose.yml` at the repo root runs the full stack locally:
+`docker-compose.yml` at the repo root runs the backend services locally:
 `inventory-db`, `billing-db`, `rabbit-queue`, `inventory-app`, `billing-app`.
+`api-gateway-app` is not part of it: it needs a Cognito user pool to check
+tokens and refuses to start without one, so it is tested on AWS.
 
 ## Running it
 
@@ -30,9 +32,10 @@ RabbitMQ AMQP on `localhost:5672`.
 
 Both `inventory-app` and `billing-app` moved from a single-stage
 `debian:12-slim` + manual `apt-get install python3 python3-pip python3-venv`
-build to a multi-stage build on `python:3.12-slim` (builder stage installs
-into a venv, final stage copies only the venv + app code, so pip/apt
-metadata never end up in the shipped image). Measured on this machine:
+build to a multi-stage build on `python:3.12-slim` (now pinned to
+`python:3.12-slim-trixie`). The builder stage installs into a venv, the
+final stage copies only the venv + app code, so pip/apt metadata never end
+up in the shipped image. Measured on this machine:
 
 | Image | Before | After | Change |
 |---|---|---|---|
@@ -78,7 +81,7 @@ Podman's default OCI format drops the `HEALTHCHECK`, and then
 
 ## A real bug this surfaced
 
-Running the full stack from a clean state (`docker compose down --volumes`
+Running the stack from a clean state (`docker compose down --volumes`
 then up) exposed a startup-order race: `inventory-db` and `rabbit-queue`
 both run a first-boot init script that briefly starts their server process,
 configures it (creates the role/db, or the user/queue), then restarts it

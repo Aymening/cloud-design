@@ -15,6 +15,7 @@ members is in [Tasks.md](Tasks.md).
 - [Verifying the deployment](#verifying-the-deployment)
 - [Using the API](#using-the-api)
 - [Billing queue resilience](#billing-queue-resilience)
+- [Monitoring and logging](#monitoring-and-logging)
 - [Load testing and auto-scaling](#load-testing-and-auto-scaling)
 - [Vulnerability scanning](#vulnerability-scanning)
 - [Cost management and tearing down](#cost-management-and-tearing-down)
@@ -150,6 +151,7 @@ sequenceDiagram
         GW-->>C: response
     else POST /api/billing
         GW->>MQ: publish to billing_queue (persistent)
+        MQ-->>GW: confirm: message stored
         GW-->>C: 200 Message posted
         MQ->>B: deliver message
         B->>DB: INSERT order into billing-db
@@ -157,9 +159,9 @@ sequenceDiagram
     end
 ```
 
-Billing is asynchronous: the client gets its answer as soon as the order is
-safely in the queue. If billing-app is down, orders wait in the queue
-instead of failing (see
+Billing is asynchronous: the client gets its answer as soon as RabbitMQ
+confirms that it has stored the order in the queue (publisher confirms). If
+billing-app is down, orders wait in the queue instead of failing (see
 [Billing queue resilience](#billing-queue-resilience)). If billing-db is
 down, billing-app puts the order back in the queue and tries again every 5
 seconds until the database is back. An order that can't be read (missing
@@ -215,7 +217,8 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 - The load balancer spans two availability zones, and when a service runs
   more than one task, ECS spreads them across both. The load balancer only
   sends traffic to tasks that pass `/health`.
-- ECS replaces any task that crashes or fails its container health check,
+- Every service has a container health check (`/health` for the apps, the
+  AMQP port for RabbitMQ). ECS replaces any task that crashes or fails it,
   and removes it from Cloud Map DNS in the meantime.
 - Deployments have a circuit breaker: if the new version keeps failing, ECS
   rolls back to the previous one.
@@ -243,7 +246,8 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
   access token. The gateway checks its signature against the user pool's
   published keys, its expiry and issuer, and that it was issued to this
   app's client (`srcs/api-gateway-app/app/auth.py`). Requests without a
-  valid token get `401`.
+  valid token get `401`. The gateway refuses to start without the user
+  pool settings, so it can never run with authentication turned off.
 - **Private resources:** databases, RabbitMQ and all tasks are in private
   subnets without public IPs; the databases accept connections only from
   the app tasks.
@@ -281,8 +285,9 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 - Each task owner's Terraform is a separate module that can be applied on
   its own. The modules read each other's outputs from state, so no IDs are
   copied by hand.
-- The Python app images are multi-stage builds on `python:3.12-slim`: build
-  tools and pip caches stay in the build stage, which keeps images small.
+- The Python app images are multi-stage builds on
+  `python:3.12-slim-trixie`: build tools and pip caches stay in the build
+  stage, which keeps images small.
 
 ## Repository layout
 
@@ -293,9 +298,9 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 | `terraform/aymen/` | Networking, databases, messaging, monitoring (tasks 1, 2, 4, 5) |
 | `terraform/houda/ecr` | Image repositories and vulnerability scanning (tasks 6, 8) |
 | `terraform/houda/platform` | ECS cluster and services, load balancer, HTTPS, Cognito, IAM, auto-scaling (tasks 6-9) |
-| `scripts/` | Push images to ECR, get an API token |
+| `scripts/` | Push images to ECR (`push-images.sh`), get an API token (`get-token.sh`), check the local Docker Compose stack (`smoke-test.sh`, `test-billing-consumer.sh`) |
 | `load-test/` | k6 load test and scaling monitor (task 9) |
-| `docker-compose.yml`, `LOCAL_TESTING.md` | Run the services locally with Docker Compose and check them with `docker ps` (task 3) |
+| `docker-compose.yml`, `LOCAL_TESTING.md` | Run the backend services (all but the gateway, which needs Cognito) locally with Docker Compose and check them with `docker ps` (task 3) |
 
 Each Terraform module has its own README with more detail.
 
