@@ -1,0 +1,21 @@
+# Reads outputs from the databases and messaging modules so alarms can
+# target the real RDS instances and log group without duplicating them.
+data "terraform_remote_state" "databases" {
+  backend = "local"
+  config = {
+    path = "${path.module}/../02-databases/terraform.tfstate"
+  }
+}
+
+data "terraform_remote_state" "messaging" {
+  backend = "local"
+  config = {
+    path = "${path.module}/../04-messaging/terraform.tfstate"
+  }
+}
+
+locals {
+  inventory_db_identifier = data.terraform_remote_state.databases.outputs.inventory_db_identifier
+  billing_db_identifier   = data.terraform_remote_state.databases.outputs.billing_db_identifier
+  rabbitmq_log_group_name = data.terraform_remote_state.messaging.outputs.log_group_name
+}
