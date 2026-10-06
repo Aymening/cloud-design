@@ -83,6 +83,9 @@ during a run; on macOS, `caffeinate -is <command>`.
 | 33.5 min | first scale-in (16.5 min after the load) | 3 | 1 | 1 |
 | 42 min | back to 1 task (25 min after the load) | 1 | 1 | 1 |
 
+Graphs of requests, running tasks, CPU and response time for both runs are
+in [the monitoring module's README](../terraform/aymen/05-monitoring/README.md#screenshots).
+
 Run 2 scaled out at the same points (3 tasks at 6 min, 4 at 7 min) and
 was back to 1 task 29 min after the load stopped.
 

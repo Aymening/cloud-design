@@ -160,9 +160,10 @@ sequenceDiagram
 Billing is asynchronous: the client gets its answer as soon as the order is
 safely in the queue. If billing-app is down, orders wait in the queue
 instead of failing (see
-[Billing queue resilience](#billing-queue-resilience)). If billing-app is
-running but can't write to billing-db, the order is rejected from the queue
-and the error is logged.
+[Billing queue resilience](#billing-queue-resilience)). If billing-db is
+down, billing-app puts the order back in the queue and tries again every 5
+seconds until the database is back. An order that can't be read (missing
+fields) is logged and dropped, so it doesn't block the queue.
 
 Routing done by the gateway:
 
@@ -499,12 +500,15 @@ aws logs tail /ecs/cloud-design --log-stream-name-prefix billing --since 10m --f
 
 | What | Where | Shows |
 |------|-------|-------|
-| Dashboard `cloud-design-overview` | CloudWatch → **Dashboards** | CPU, free storage and connections of both databases, RabbitMQ error count and its latest logs |
-| Alarms with email alerts | CloudWatch → **Alarms**, `cloud-design-*` | Database CPU above 80 %, free storage below 2 GB, more than 50 connections, any error in the RabbitMQ logs. An alarm emails `alert_email` through SNS |
+| Dashboard `cloud-design-overview` | CloudWatch → **Dashboards** | App: requests per minute, response time (p95), 5xx/4xx errors, healthy gateway targets, running tasks per service, CPU and memory per service, billing orders saved per minute, latest app errors. Databases and queue: RDS CPU, storage and connections, RabbitMQ errors and logs |
+| Alarms with email alerts | CloudWatch → **Alarms**, `cloud-design-*` | API down (no healthy gateway task), more than 10 server errors in 5 minutes, a service with no running task, database CPU above 80 %, free storage below 2 GB, more than 50 connections, any error in the RabbitMQ logs. An alarm emails `alert_email` through SNS |
 | Auto-scaling alarms | CloudWatch → **Alarms**, `TargetTracking-*` | When each app service scales out and in |
 | App service metrics | ECS → cluster → service → **Health and metrics** | CPU, memory and task count of each service |
 | Load balancer metrics | EC2 → **Load balancers** → `cloud-design-alb` → **Monitoring** | Requests, response time, 4xx/5xx errors, healthy targets |
 | Container logs | CloudWatch → **Log groups** | `/ecs/cloud-design` (one stream per task, prefixes `api-gateway`, `inventory`, `billing`, kept 7 days), `/ecs/cloud-design-rabbit-queue` (kept 14 days) |
+
+Graphs of these metrics during the load tests are in
+[terraform/aymen/05-monitoring/README.md](terraform/aymen/05-monitoring/README.md#screenshots).
 
 ```bash
 # Dashboard link
@@ -541,16 +545,23 @@ aws application-autoscaling describe-scaling-policies --service-namespace ecs \
 aws ecr describe-image-scan-findings --repository-name cloud-design/api-gateway-app \
   --image-id imageTag=latest --query 'imageScanFindings.findingSeverityCounts'
 
-# All findings for the project's images, most severe first
+# Findings of the deployed images (tag latest), most severe first
 aws inspector2 list-findings --sort-criteria field=SEVERITY,sortOrder=DESC \
-  --filter-criteria '{"ecrImageRepositoryName":[{"comparison":"PREFIX","value":"cloud-design/"}]}' \
-  --query 'findings[].[severity,title]' --output table
+  --filter-criteria '{"ecrImageRepositoryName":[{"comparison":"PREFIX","value":"cloud-design/"}],"ecrImageTags":[{"comparison":"EQUALS","value":"latest"}],"findingStatus":[{"comparison":"EQUALS","value":"ACTIVE"}]}' \
+  --query 'findings[].[resources[0].details.awsEcrContainerImage.repositoryName,severity,title]' --output table
 ```
 
 When a finding has a fixed version, update the package (in the service's
 `requirements.txt` or its Dockerfile) and push the image again: Inspector
 scans the new image automatically. Findings in Debian base packages that
 have no fix yet stay listed until the base image is updated.
+
+The remaining critical finding is in `rabbit-queue`: Debian 12 ships
+RabbitMQ 3.10.8 and Debian has no fixed version. Moving to a newer RabbitMQ
+means changing major versions, which can't open the queue data already
+stored on EFS, so it is planned as a separate migration. Until then the risk
+is limited: RabbitMQ is only reachable from the app tasks inside the private
+subnets (its security group allows nothing else) and needs a password.
 
 ## Cost management and tearing down
 

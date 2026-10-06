@@ -42,6 +42,40 @@ metadata never end up in the shipped image). Measured on this machine:
 Build time also dropped (less to install/unpack in the final stage), though
 that's noisier to measure since it depends on what's already cached locally.
 
+### All deployed images
+
+Measured on 2026-10-06 with Podman, building with `--no-cache` (nothing
+reused). "Compressed" is the size stored in ECR, which is what Fargate
+downloads when a task starts.
+
+| Image | Base | Build time | Size | Compressed (ECR) |
+|---|---|---|---|---|
+| `api-gateway-app` | `python:3.12-slim-trixie`, multi-stage | 18 s | 165 MB | 54 MB |
+| `inventory-app` | `python:3.12-slim-trixie`, multi-stage | 18 s | 179 MB | 58 MB |
+| `billing-app` | `python:3.12-slim-trixie`, multi-stage | 18 s | 174 MB | 57 MB |
+| `rabbit-queue` | `debian:12-slim` + Debian's `rabbitmq-server` | 19 s | 194 MB | 80 MB |
+
+Other choices that keep builds fast and images small and safe:
+
+- `requirements.txt` is copied and installed before the source code, so a
+  code change reuses the cached dependency layer and rebuilds in seconds.
+- The Python base is pinned to a Debian release (`-trixie`), so it can't
+  change underneath us without a Dockerfile change.
+- `rabbit-queue` and the database images run `apt-get upgrade` so they get
+  Debian's latest security fixes (this removed the critical `perl` findings
+  Amazon Inspector reported on `rabbit-queue`).
+- Every app runs as a non-root user. `rabbit-queue` and the databases start
+  as root only to set up their data directory, then run the server as the
+  `rabbitmq`/`postgres` user.
+- `.dockerignore` keeps everything except `srcs/` out of the build context.
+  Docker sends the whole context to the builder before building, and
+  without it that would include about 1.4 GB of `.terraform` provider
+  folders, Terraform state (which holds database passwords) and `.env`.
+
+With Podman, build with `BUILDAH_FORMAT=docker` (or `--format docker`):
+Podman's default OCI format drops the `HEALTHCHECK`, and then
+`docker compose up` waits forever for the databases to become healthy.
+
 ## A real bug this surfaced
 
 Running the full stack from a clean state (`docker compose down --volumes`
