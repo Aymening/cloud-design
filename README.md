@@ -49,7 +49,7 @@ flowchart TB
     subgraph managed["Regional AWS services used by the tasks"]
         ecr["ECR + Inspector: images, vulnerability scans"]
         sm["Secrets Manager: credentials"]
-        cw["CloudWatch: logs, scaling alarms"]
+        cw["CloudWatch: logs, dashboard, alarms (email via SNS)"]
         cm["Cloud Map: *.local DNS"]
     end
 
@@ -109,8 +109,9 @@ flowchart TB
   scans every image for known vulnerabilities, and keeps re-checking them.
 - **AWS Secrets Manager**: database, RabbitMQ and test-user credentials,
   given to the containers when they start.
-- **Amazon CloudWatch**: container logs, and the metrics and alarms that
-  drive auto-scaling.
+- **Amazon CloudWatch**: container logs, the metrics and alarms that drive
+  auto-scaling, and a dashboard with alarms that email the team (through
+  Amazon SNS) when a database or RabbitMQ has a problem.
 
 | Component | Terraform module (task) |
 |-----------|-------------------------|
@@ -121,6 +122,7 @@ flowchart TB
 | ECS cluster and services, load balancer, Cloud Map | `terraform/houda/platform` (6, 7) |
 | HTTPS certificate, Cognito, IAM roles | `terraform/houda/platform` (8) |
 | Auto-scaling policies | `terraform/houda/platform` (9) |
+| Dashboard, alarms, alert emails | `terraform/aymen/05-monitoring` (5) |
 
 ### Request flow
 
@@ -156,9 +158,11 @@ sequenceDiagram
 ```
 
 Billing is asynchronous: the client gets its answer as soon as the order is
-safely in the queue. If billing-app or billing-db is down, orders wait in
-the queue instead of failing (see
-[Billing queue resilience](#billing-queue-resilience)).
+safely in the queue. If billing-app is down, orders wait in the queue
+instead of failing (see
+[Billing queue resilience](#billing-queue-resilience)). If billing-app is
+running but can't write to billing-db, the order is rejected from the queue
+and the error is logged.
 
 Routing done by the gateway:
 
@@ -285,11 +289,12 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 |------|----------|
 | `srcs/` | Application source code |
 | `Dockerfiles/` | One Dockerfile per image |
-| `terraform/aymen/` | Networking, databases, messaging (tasks 1, 2, 4) |
+| `terraform/aymen/` | Networking, databases, messaging, monitoring (tasks 1, 2, 4, 5) |
 | `terraform/houda/ecr` | Image repositories and vulnerability scanning (tasks 6, 8) |
 | `terraform/houda/platform` | ECS cluster and services, load balancer, HTTPS, Cognito, IAM, auto-scaling (tasks 6-9) |
 | `scripts/` | Push images to ECR, get an API token |
 | `load-test/` | k6 load test and scaling monitor (task 9) |
+| `docker-compose.yml`, `LOCAL_TESTING.md` | Run the services locally with Docker Compose and check them with `docker ps` (task 3) |
 
 Each Terraform module has its own README with more detail.
 
@@ -361,7 +366,14 @@ terraform init && terraform apply -var-file=terraform.tfvars \
 cd ../../houda/platform
 terraform init && terraform apply -var-file=terraform.tfvars
 terraform output app_url
+
+# 6. Dashboard and alarms (set alert_email in terraform.tfvars first)
+cd ../../aymen/05-monitoring
+terraform init && terraform apply -var-file=terraform.tfvars
 ```
+
+After step 6, AWS emails `alert_email` a confirmation link: alarm emails
+are only sent once it's clicked.
 
 The services take 2-3 minutes after step 5 to start and pass their health
 checks.
@@ -406,6 +418,9 @@ container with ECS Exec) are in
 ```bash
 cd terraform/houda/platform
 APP_URL=$(terraform output -raw app_url)
+
+# Plain HTTP is redirected to HTTPS
+curl -sI "${APP_URL/https:/http:}/health" | head -1   # HTTP/1.1 301 Moved Permanently
 
 # No token: rejected
 curl -k -i "$APP_URL/api/movies"                  # 401 Missing bearer token
@@ -480,13 +495,38 @@ aws application-autoscaling register-scalable-target --service-namespace ecs \
 aws logs tail /ecs/cloud-design --log-stream-name-prefix billing --since 10m --follow
 ```
 
+## Monitoring and logging
+
+| What | Where | Shows |
+|------|-------|-------|
+| Dashboard `cloud-design-overview` | CloudWatch → **Dashboards** | CPU, free storage and connections of both databases, RabbitMQ error count and its latest logs |
+| Alarms with email alerts | CloudWatch → **Alarms**, `cloud-design-*` | Database CPU above 80 %, free storage below 2 GB, more than 50 connections, any error in the RabbitMQ logs. An alarm emails `alert_email` through SNS |
+| Auto-scaling alarms | CloudWatch → **Alarms**, `TargetTracking-*` | When each app service scales out and in |
+| App service metrics | ECS → cluster → service → **Health and metrics** | CPU, memory and task count of each service |
+| Load balancer metrics | EC2 → **Load balancers** → `cloud-design-alb` → **Monitoring** | Requests, response time, 4xx/5xx errors, healthy targets |
+| Container logs | CloudWatch → **Log groups** | `/ecs/cloud-design` (one stream per task, prefixes `api-gateway`, `inventory`, `billing`, kept 7 days), `/ecs/cloud-design-rabbit-queue` (kept 14 days) |
+
+```bash
+# Dashboard link
+terraform -chdir=terraform/aymen/05-monitoring output -raw dashboard_url
+
+# Alarms and their current state
+aws cloudwatch describe-alarms --alarm-name-prefix cloud-design- \
+  --query 'MetricAlarms[].[AlarmName,StateValue]' --output table
+
+# Errors logged by the app services in the last hour
+aws logs filter-log-events --log-group-name /ecs/cloud-design \
+  --start-time $(( ($(date +%s) - 3600) * 1000 )) --filter-pattern '?ERROR ?Error ?error' \
+  --query 'events[].[logStreamName,message]' --output text
+```
+
 ## Load testing and auto-scaling
 
 `load-test/run-load-test.sh` sends a ramping load through the load balancer
 with k6 (run in a container), while `load-test/watch-scaling.sh` records the
 task count and CPU of each service. The test scenarios, how to run them, and
-the measured results before and after auto-scaling are in
-[load-test/README.md](load-test/README.md).
+the measured results (latency, errors, scaling timeline, CPU at each load
+level, tuning decisions) are in [load-test/README.md](load-test/README.md).
 
 ```bash
 aws application-autoscaling describe-scaling-policies --service-namespace ecs \
@@ -507,6 +547,11 @@ aws inspector2 list-findings --sort-criteria field=SEVERITY,sortOrder=DESC \
   --query 'findings[].[severity,title]' --output table
 ```
 
+When a finding has a fixed version, update the package (in the service's
+`requirements.txt` or its Dockerfile) and push the image again: Inspector
+scans the new image automatically. Findings in Debian base packages that
+have no fix yet stay listed until the base image is updated.
+
 ## Cost management and tearing down
 
 The NAT gateway, the load balancer, the RDS instances and the running tasks
@@ -515,7 +560,8 @@ Cost Explorer**, and destroy everything when you are done testing, in
 reverse order:
 
 ```bash
-cd terraform/houda/platform       && terraform destroy -var-file=terraform.tfvars
+cd terraform/aymen/05-monitoring  && terraform destroy -var-file=terraform.tfvars
+cd ../../houda/platform           && terraform destroy -var-file=terraform.tfvars
 cd ../../aymen/04-messaging       && terraform destroy -var-file=terraform.tfvars
 cd ../../houda/ecr                && terraform destroy -var-file=terraform.tfvars
 cd ../../aymen/02-databases       && terraform destroy -var-file=terraform.tfvars
