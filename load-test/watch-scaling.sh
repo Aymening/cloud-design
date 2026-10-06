@@ -20,7 +20,7 @@ while true; do
     while read -r service desired running; do
       cpu=$(aws cloudwatch get-metric-statistics --namespace AWS/ECS --metric-name CPUUtilization \
         --dimensions Name=ClusterName,Value="$cluster" Name=ServiceName,Value="$service" \
-        --start-time "$(date -u -d '-3 minutes' +%FT%TZ)" --end-time "$(date -u +%FT%TZ)" \
+        --start-time "$(date -u -v-3M +%FT%TZ 2>/dev/null || date -u -d '-3 minutes' +%FT%TZ)" --end-time "$(date -u +%FT%TZ)" \
         --period 60 --statistics Average \
         --query 'sort_by(Datapoints, &Timestamp)[-1].Average' --output text </dev/null)
       [ "$cpu" = "None" ] || cpu=$(printf '%.0f' "$cpu")
