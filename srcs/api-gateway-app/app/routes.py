@@ -1,10 +1,8 @@
-import os
-
 import pika
 import requests
 from flask import Blueprint, Response, jsonify, request
 
-from app.auth import require_cognito_token
+from app.auth import require_cognito_token, required_environment
 
 gateway_bp = Blueprint('gateway', __name__)
 gateway_bp.before_request(require_cognito_token)
@@ -13,13 +11,6 @@ gateway_bp.before_request(require_cognito_token)
 @gateway_bp.get('/health')
 def health():
     return jsonify({"status": "ok", "service": "api-gateway-app"}), 200
-
-
-def required_environment(name):
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required Gateway configuration: {name}")
-    return value
 
 
 INVENTORY_SERVICE_URL = required_environment("INVENTORY_SERVICE_URL")
@@ -42,11 +33,16 @@ def publish_to_rabbitmq(message_body):
         connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
         channel.queue_declare(queue=RABBITMQ_QUEUE, durable=True)
+        # With publisher confirms, basic_publish waits until RabbitMQ has
+        # stored the message in the queue, and raises if it couldn't, so the
+        # client only gets 200 for an order that is really queued.
+        channel.confirm_delivery()
         channel.basic_publish(
             exchange='',
             routing_key=RABBITMQ_QUEUE,
             body=message_body,
-            properties=pika.BasicProperties(delivery_mode=2)
+            properties=pika.BasicProperties(delivery_mode=2),
+            mandatory=True
         )
     finally:
         if connection and connection.is_open:

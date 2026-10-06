@@ -3,21 +3,23 @@ import os
 import jwt
 from flask import jsonify, request
 
-COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID")
-COGNITO_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID")
 
-# Authentication is only enforced when the gateway runs with a Cognito user
-# pool (on AWS). Without one, e.g. in local docker-compose runs, every request
-# is let through as before.
-_jwks_client = None
-_issuer = None
-if COGNITO_USER_POOL_ID:
-    if not COGNITO_CLIENT_ID:
-        raise RuntimeError("Missing required Gateway configuration: COGNITO_CLIENT_ID")
-    region = COGNITO_USER_POOL_ID.split("_", 1)[0]
-    _issuer = f"https://cognito-idp.{region}.amazonaws.com/{COGNITO_USER_POOL_ID}"
-    # The signing keys are fetched once and cached, not on every request.
-    _jwks_client = jwt.PyJWKClient(f"{_issuer}/.well-known/jwks.json")
+def required_environment(name):
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing required Gateway configuration: {name}")
+    return value
+
+
+# Both are required: the gateway refuses to start without them rather than
+# serving /api/* without authentication.
+COGNITO_USER_POOL_ID = required_environment("COGNITO_USER_POOL_ID")
+COGNITO_CLIENT_ID = required_environment("COGNITO_CLIENT_ID")
+
+_region = COGNITO_USER_POOL_ID.split("_", 1)[0]
+_issuer = f"https://cognito-idp.{_region}.amazonaws.com/{COGNITO_USER_POOL_ID}"
+# The signing keys are fetched once and cached, not on every request.
+_jwks_client = jwt.PyJWKClient(f"{_issuer}/.well-known/jwks.json")
 
 
 def unauthorized(message):
@@ -31,7 +33,7 @@ def require_cognito_token():
 
     Runs before every request; returning a response stops the request there.
     """
-    if _jwks_client is None or not request.path.startswith("/api/"):
+    if not request.path.startswith("/api/"):
         return None
 
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")

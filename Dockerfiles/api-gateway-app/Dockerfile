@@ -10,10 +10,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 FROM python:3.12-slim-trixie
 
-RUN useradd --create-home appuser \
-    && install -d -o appuser -g appuser /var/log/api-gateway
+RUN useradd --create-home appuser
 
-ENV PATH=/opt/venv/bin:$PATH
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
