@@ -1,19 +1,22 @@
-FROM debian:12-slim
+FROM python:3.12-slim AS builder
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv \
-    && rm -rf /var/lib/apt/lists/* \
-    && python3 -m venv /opt/venv \
-    && useradd --create-home appuser \
-    && install -d -o appuser -g appuser /var/log/api-gateway
-
+RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
 WORKDIR /app
-
 COPY srcs/api-gateway-app/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+
+FROM python:3.12-slim
+
+RUN useradd --create-home appuser \
+    && install -d -o appuser -g appuser /var/log/api-gateway
+
+ENV PATH=/opt/venv/bin:$PATH
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
 COPY srcs/api-gateway-app/app ./app
 COPY srcs/api-gateway-app/server.py .
 

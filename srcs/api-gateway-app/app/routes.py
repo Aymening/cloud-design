@@ -4,7 +4,10 @@ import pika
 import requests
 from flask import Blueprint, Response, jsonify, request
 
+from app.auth import require_cognito_token
+
 gateway_bp = Blueprint('gateway', __name__)
+gateway_bp.before_request(require_cognito_token)
 
 
 @gateway_bp.get('/health')

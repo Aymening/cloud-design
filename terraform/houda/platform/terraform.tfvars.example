@@ -1,0 +1,14 @@
+aws_region   = "eu-west-3"
+project_name = "cloud-design"
+image_tag    = "latest"
+
+# Auto-scaling - adjust after the load test (see load-test/README.md)
+autoscaling_min_capacity    = 1
+autoscaling_max_capacity    = 4
+cpu_target_percent          = 60
+gateway_requests_per_target = 600
+
+# HTTPS with your own domain (optional). Leave both commented out to use a
+# self-signed certificate on the load balancer's DNS name.
+# domain_name     = "app.example.com"
+# route53_zone_id = "Z0123456789ABCDEFGHIJ"
