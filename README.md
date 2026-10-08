@@ -13,11 +13,11 @@ is down.
 | [3. Project files](#3-project-files) | What every file in the repository does |
 | [4. Prerequisites and configuration](#4-prerequisites-and-configuration) | Tools, AWS access, settings |
 | [5. Commands](#5-commands) | Deploy, update, run locally, load test, debug, tear down |
-| [6. Audit guide](#6-audit-guide) | The commands to run for each audit question, with the expected result |
-| [7. Testing with Postman](#7-testing-with-postman) | Import the collection and run it |
-| [8. Docker images](#8-docker-images) | How the images were optimized, sizes and build times |
+| [6. Docker images](#6-docker-images) | How the images were optimized, sizes and build times |
 
-The task split between the two team members is in [Tasks.md](Tasks.md).
+Using AWS step by step, the commands for the audit and the Postman
+collection are in [COMMANDS.md](COMMANDS.md). The task split between the
+two team members is in [Tasks.md](Tasks.md).
 
 ## 1. Architecture
 
@@ -292,13 +292,14 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 | File | What it does |
 |------|--------------|
 | `README.md` | This document |
+| `COMMANDS.md` | Using AWS step by step, the commands for the audit, and how to use the Postman collection |
 | `Tasks.md` | How the work was split into 10 tasks between the two team members |
 | `docker-compose.yml` | Runs the backend locally: inventory-db, billing-db, rabbit-queue, inventory-app, billing-app. The gateway isn't included: it needs a Cognito user pool, so it is tested on AWS |
 | `.env.example` | Example settings for Docker Compose (database and RabbitMQ users, passwords, names). Copy it to `.env`, which git ignores |
 | `.gitignore` | Keeps secrets and generated files out of git: `.env`, `*.tfvars`, Terraform state and `.terraform/` folders, plan files, load-test results |
 | `.dockerignore` | Keeps everything except the source code out of the Docker build context: faster builds, and no state files or `.env` in images |
 | `openapi.yaml` | OpenAPI 3 description of the public API: paths, request bodies, responses, the Bearer token security |
-| `postman/cloud-design.postman_collection.json` | Postman collection: 14 requests with automatic checks (section 7) |
+| `postman/cloud-design.postman_collection.json` | Postman collection: 14 requests with automatic checks; how to use it: [COMMANDS.md](COMMANDS.md#214-testing-with-postman) |
 
 ### `srcs/`: application source code
 
@@ -419,7 +420,7 @@ one's IDs reads them from that module's state file (`terraform_remote_state`).
 
 | File | What it does |
 |------|--------------|
-| `dashboard.tf` | The CloudWatch dashboard `cloud-design-overview` (14 graphs, listed in section 6.10) |
+| `dashboard.tf` | The CloudWatch dashboard `cloud-design-overview` (14 graphs) |
 | `app_alarms.tf` | Alarms: no healthy gateway task, too many server errors (5xx), a service with no running task |
 | `rds_alarms.tf` | Alarms per database: high CPU, low free storage, too many connections |
 | `log_alarms.tf` | Counts errors in RabbitMQ's logs and raises an alarm on any |
@@ -488,6 +489,8 @@ project in `eu-west-3` with the name prefix `cloud-design`.
 ## 5. Commands
 
 All commands run from the repository root unless a `cd` says otherwise.
+A slower version with a check after each step, and the commands for the
+audit, are in [COMMANDS.md](COMMANDS.md).
 
 ### 5.1 Deploy everything (first time)
 
@@ -670,409 +673,7 @@ cd ../../aymen/02-databases       && terraform destroy -var-file=terraform.tfvar
 cd ../01-networking               && terraform destroy -var-file=terraform.tfvars
 ```
 
-## 6. Audit guide
-
-The audit questions in order, with the commands to show and the result to
-expect. `terraform plan` (6.8) must run on the machine that has the
-Terraform state files; everything else works on any machine with the AWS
-CLI configured.
-
-### 6.1 Before you start
-
-```bash
-cd cloud-design                          # the repository root
-export AWS_REGION=eu-west-3
-aws sts get-caller-identity              # which AWS account and user the CLI uses
-
-CLUSTER=cloud-design-cluster
-APP_URL=https://$(aws elbv2 describe-load-balancers --names cloud-design-alb \
-  --query 'LoadBalancers[0].DNSName' --output text)
-TOKEN=$(scripts/get-token.sh)            # valid 60 minutes: run it again when it expires
-AUTH="Authorization: Bearer $TOKEN"
-```
-
-### 6.2 Repository content
-
-```bash
-ls
-ls srcs Dockerfiles scripts terraform/aymen terraform/houda
-```
-
-Expected: this README, the source code of the 4 services, the Dockerfiles,
-the deployment scripts, the 6 Terraform modules and `docker-compose.yml`.
-Section 3 explains every file.
-
-### 6.3 The deployment
-
-```bash
-# Every service: desired = running, "has reached a steady state"
-aws ecs describe-services --cluster $CLUSTER \
-  --services api-gateway-service inventory-service billing-service rabbit-queue-service \
-  --query 'services[].{name:serviceName,desired:desiredCount,running:runningCount,event:events[0].message}' \
-  --output table
-
-# Every task: RUNNING and HEALTHY, spread over 2 availability zones
-aws ecs describe-tasks --cluster $CLUSTER \
-  --tasks $(aws ecs list-tasks --cluster $CLUSTER --query 'taskArns[]' --output text) \
-  --query 'tasks[].{task:group,status:lastStatus,health:healthStatus,zone:availabilityZone}' --output table
-
-# Service discovery: the private IP behind each internal name
-for s in inventory-app billing-app rabbit-queue; do
-  echo "$s.local: $(aws servicediscovery discover-instances --namespace-name local --service-name $s \
-    --query 'Instances[].Attributes.AWS_INSTANCE_IPV4' --output text)"
-done
-
-# No errors in the logs during the last hour (empty output)
-aws logs filter-log-events --log-group-name /ecs/cloud-design \
-  --start-time $(( ($(date +%s) - 3600) * 1000 )) --filter-pattern '?ERROR ?Error ?Traceback' \
-  --query 'events[].[logStreamName,message]' --output text
-```
-
-`docker ps` applies to the local stack (section 5.5): `docker compose up -d
---build`, then `docker ps` shows the 5 containers `(healthy)`.
-
-### 6.4 Load balancing
-
-```bash
-# Internet-facing, in 2 availability zones
-aws elbv2 describe-load-balancers --names cloud-design-alb \
-  --query 'LoadBalancers[0].{scheme:Scheme,state:State.Code,zones:AvailabilityZones[].ZoneName}'
-
-# HTTPS on 443 (TLS 1.2/1.3 policy), HTTP on 80 redirects to HTTPS
-LB=$(aws elbv2 describe-load-balancers --names cloud-design-alb \
-  --query 'LoadBalancers[0].LoadBalancerArn' --output text)
-aws elbv2 describe-listeners --load-balancer-arn $LB \
-  --query 'Listeners[].{port:Port,protocol:Protocol,tls:SslPolicy,action:DefaultActions[0].Type}' --output table
-
-# Gateway tasks behind it: all "healthy"
-TG=$(aws elbv2 describe-target-groups --names cloud-design-api-gateway-tg \
-  --query 'TargetGroups[0].TargetGroupArn' --output text)
-aws elbv2 describe-target-health --target-group-arn $TG \
-  --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State]' --output table
-```
-
-How traffic is spread: the load balancer sends requests to the healthy
-gateway tasks in both zones; the gateway reaches inventory-app through Cloud
-Map DNS, which returns the IPs of all healthy inventory tasks; RabbitMQ gives
-each billing message to one of the billing tasks. When idle, each service
-runs 1 task. To show the load balancer with 2 targets, one per zone:
-
-```bash
-TARGET=service/$CLUSTER/api-gateway-service
-
-# Pause scale-in, so auto-scaling doesn't remove the extra task during the demo
-aws application-autoscaling register-scalable-target --service-namespace ecs \
-  --scalable-dimension ecs:service:DesiredCount --resource-id $TARGET \
-  --suspended-state DynamicScalingInSuspended=true
-aws ecs update-service --cluster $CLUSTER --service api-gateway-service --desired-count 2 >/dev/null
-aws ecs wait services-stable --cluster $CLUSTER --services api-gateway-service
-
-# Run again until both targets are "healthy" (about 30 s)
-aws elbv2 describe-target-health --target-group-arn $TG \
-  --query 'TargetHealthDescriptions[].[Target.Id,Target.AvailabilityZone,TargetHealth.State]' --output table
-
-# Back to normal
-aws ecs update-service --cluster $CLUSTER --service api-gateway-service --desired-count 1 >/dev/null
-aws application-autoscaling register-scalable-target --service-namespace ecs \
-  --scalable-dimension ecs:service:DesiredCount --resource-id $TARGET \
-  --suspended-state DynamicScalingInSuspended=false
-```
-
-The load test (6.11) shows the gateway going from 1 to 4 tasks under load.
-
-### 6.5 Communication between services
-
-```bash
-# Security groups: name, ID, open ports, which groups (or addresses) may connect
-aws ec2 describe-security-groups --filters Name=group-name,Values='cloud-design-*' \
-  --query 'SecurityGroups[].[GroupName,GroupId,join(`,`,IpPermissions[].to_string(FromPort)),join(`,`,IpPermissions[].UserIdGroupPairs[].GroupId),join(`,`,IpPermissions[].IpRanges[].CidrIp)]' \
-  --output table
-
-# Databases accept only SSL connections (value 1)
-aws rds describe-db-parameters --db-parameter-group-name default.postgres16 \
-  --query "Parameters[?ParameterName=='rds.force_ssl'].[ParameterName,ParameterValue]" --output text
-
-# RabbitMQ's EFS volume: encrypted in transit, mounted with IAM authorization
-aws ecs describe-task-definition --task-definition cloud-design-rabbit-queue \
-  --query 'taskDefinition.volumes[0].efsVolumeConfiguration.{transitEncryption:transitEncryption,iam:authorizationConfig.iam}'
-```
-
-Expected: only the load balancer is open to the internet (80, 443); the app
-tasks accept 3000 only from the load balancer and 8080 only from each other;
-the databases accept 5432 and RabbitMQ 5672 only from the app tasks; EFS
-accepts NFS only from RabbitMQ. Database and EFS traffic is encrypted, and
-RabbitMQ requires a username and password. The gateway-to-inventory HTTP and
-the AMQP traffic stay inside the private subnets unencrypted; section 2
-(Security) explains why.
-
-### 6.6 The API: create and get movies
-
-```bash
-# Create a movie: 201 Created
-curl -k -i -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"title": "Inception", "description": "Dreams within dreams"}' "$APP_URL/api/movies"
-
-# Get all movies: 200, the list contains the new movie
-curl -k -i -H "$AUTH" "$APP_URL/api/movies"
-
-# Get one movie (put the id returned by the POST)
-curl -k -i -H "$AUTH" "$APP_URL/api/movies/<id>"
-
-# Search by title
-curl -k -H "$AUTH" "$APP_URL/api/movies?title=incep"
-```
-
-The same requests are in the Postman collection (section 7).
-
-### 6.7 Billing queue resilience
-
-Orders sent while billing-app is stopped wait in RabbitMQ and are processed
-when it comes back:
-
-```bash
-TARGET=service/$CLUSTER/billing-service
-
-# 1. Stop billing-app. Auto-scaling is paused first so it doesn't start a task again.
-aws application-autoscaling register-scalable-target --service-namespace ecs \
-  --scalable-dimension ecs:service:DesiredCount --resource-id $TARGET \
-  --suspended-state DynamicScalingInSuspended=true,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=true
-aws ecs update-service --cluster $CLUSTER --service billing-service --desired-count 0 >/dev/null
-aws ecs wait services-stable --cluster $CLUSTER --services billing-service
-# ...and until its task has really exited (it counts as not running as soon as it starts stopping)
-aws ecs wait tasks-stopped --cluster $CLUSTER --tasks $(aws ecs list-tasks --cluster $CLUSTER \
-  --service-name billing-service --desired-status STOPPED --query 'taskArns[]' --output text)
-aws ecs describe-services --cluster $CLUSTER --services billing-service \
-  --query 'services[0].runningCount'                                          # 0
-
-# 2. Send an order: still accepted (200 Message posted), it waits in the queue
-curl -k -i -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"user_id": "42", "number_of_items": 1, "total_amount": 9.99}' "$APP_URL/api/billing"
-
-# 3. Start billing-app again and resume auto-scaling
-aws ecs update-service --cluster $CLUSTER --service billing-service --desired-count 1 >/dev/null
-aws application-autoscaling register-scalable-target --service-namespace ecs \
-  --scalable-dimension ecs:service:DesiredCount --resource-id $TARGET \
-  --suspended-state DynamicScalingInSuspended=false,DynamicScalingOutSuspended=false,ScheduledScalingSuspended=false
-
-# 4. The queued order is processed as soon as the new billing task connects
-#    (about 30 s): "Received order message: {'user_id': '42', ...}", then
-#    "Order successfully inserted". Ctrl+C to stop.
-aws logs tail /ecs/cloud-design --log-stream-name-prefix billing --since 10m --follow
-```
-
-The log stream name in step 4 contains the ID of the new billing task,
-which shows that the order was processed after the restart.
-
-### 6.8 Terraform
-
-On the machine that has the state files, from the repository root:
-
-```bash
-cd terraform/aymen/01-networking && terraform plan -var-file=terraform.tfvars
-cd ../02-databases && terraform plan -var-file=terraform.tfvars
-cd ../04-messaging && terraform plan -var-file=terraform.tfvars \
-  -var "container_image=$(terraform -chdir=../../houda/ecr output -raw rabbit_queue_image)"
-cd ../../houda/ecr && terraform plan -var-file=terraform.tfvars
-cd ../platform && terraform plan -var-file=terraform.tfvars
-cd ../../aymen/05-monitoring && terraform plan -var-file=terraform.tfvars
-cd ../../..
-
-# What one module manages and exports
-terraform -chdir=terraform/houda/platform state list
-terraform -chdir=terraform/houda/platform output
-```
-
-Expected in every module: `No changes. Your infrastructure matches the
-configuration.` Running `terraform apply` with the same arguments is safe:
-with nothing to change it ends with `0 added, 0 changed, 0 destroyed`.
-
-### 6.9 Containers and orchestration
-
-```bash
-# The Dockerfiles: two stages, slim base, non-root user, health check
-cat Dockerfiles/inventory-app/Dockerfile
-
-# Image sizes as stored in ECR (compressed, bytes) and when they were pushed
-for r in api-gateway-app inventory-app billing-app rabbit-queue; do
-  aws ecr describe-images --repository-name cloud-design/$r --image-ids imageTag=latest \
-    --query 'imageDetails[0].[repositoryName,imageSizeInBytes,imagePushedAt]' --output text
-done
-
-# A task definition: size, image, port, secrets, health check, logs
-aws ecs describe-task-definition --task-definition cloud-design-inventory \
-  --query 'taskDefinition.{cpu:cpu,memory:memory,network:networkMode,image:containerDefinitions[0].image,port:containerDefinitions[0].portMappings[0].containerPort,secrets:containerDefinitions[0].secrets[].name,healthCheck:containerDefinitions[0].healthCheck.command[1],logGroup:containerDefinitions[0].logConfiguration.options."awslogs-group"}'
-
-# A service: Fargate, private subnets without public IP, rollback on failure
-aws ecs describe-services --cluster $CLUSTER --services inventory-service \
-  --query 'services[0].{launchType:launchType,taskDefinition:taskDefinition,circuitBreaker:deploymentConfiguration.deploymentCircuitBreaker,publicIp:networkConfiguration.awsvpcConfiguration.assignPublicIp,subnets:networkConfiguration.awsvpcConfiguration.subnets}'
-```
-
-Locally, `docker images` shows the image sizes after `docker compose build`.
-Section 8 has the build times and sizes before and after optimization.
-
-### 6.10 Monitoring and logging
-
-Dashboard: CloudWatch → **Dashboards** → `cloud-design-overview`, or
-<https://eu-west-3.console.aws.amazon.com/cloudwatch/home?region=eu-west-3#dashboards:name=cloud-design-overview>.
-
-| Graph | Shows |
-|-------|-------|
-| Requests per minute, Response time, HTTP errors per minute | Traffic, latency (p95) and 4xx/5xx errors at the load balancer |
-| api-gateway targets | Healthy and unhealthy gateway tasks |
-| Running tasks per service, Service CPU, Service memory | Each ECS service's task count and resource use |
-| Billing orders saved per minute, App errors (latest 50) | Queries on the app logs |
-| RDS CPU, RDS free storage, RDS connections | Both databases |
-| rabbit-queue error count, rabbit-queue recent logs | The broker's health |
-
-```bash
-# 13 alarms and their state (OK = no problem). They email alert_email through SNS.
-aws cloudwatch describe-alarms --alarm-name-prefix cloud-design- \
-  --query 'MetricAlarms[].[AlarmName,StateValue]' --output table
-
-# The email subscription (an ARN instead of "PendingConfirmation" = confirmed)
-aws sns list-subscriptions \
-  --query 'Subscriptions[?contains(TopicArn,`cloud-design`)].[Protocol,Endpoint,SubscriptionArn]' --output table
-
-# Logs of each service
-aws logs tail /ecs/cloud-design --since 10m --log-stream-name-prefix api-gateway
-aws logs tail /ecs/cloud-design-rabbit-queue --since 1h
-```
-
-The alarms: API down (no healthy gateway task), more than 10 server errors
-in 5 minutes, a service with no running task, database CPU above 80 %, free
-storage below 2 GB, more than 50 connections, and any error in RabbitMQ's
-logs. Graphs taken during the load test are in
-[terraform/aymen/05-monitoring/README.md](terraform/aymen/05-monitoring/README.md#screenshots).
-
-### 6.11 Auto-scaling and load
-
-```bash
-# Each app service: 1 to 4 tasks
-aws application-autoscaling describe-scalable-targets --service-namespace ecs \
-  --query 'ScalableTargets[].[ResourceId,MinCapacity,MaxCapacity]' --output table
-
-# Policies: CPU 60 % on each service, 600 requests per minute per gateway task
-aws application-autoscaling describe-scaling-policies --service-namespace ecs \
-  --query 'ScalingPolicies[].[PolicyName,TargetTrackingScalingPolicyConfiguration.TargetValue]' --output table
-
-# What auto-scaling did (the load test made the gateway go from 1 to 4 tasks and back)
-aws application-autoscaling describe-scaling-activities --service-namespace ecs --max-items 10 \
-  --query 'ScalingActivities[].[StartTime,ResourceId,Description]' --output table
-```
-
-Load test results at 60 requests per second (details in
-[load-test/README.md](load-test/README.md)): about 48,000 requests, 0 %
-errors, p95 latency 89 ms. The gateway scaled from 1 to 4 tasks within
-7.5 minutes and back to 1 about 25 minutes after the load stopped. Inventory
-(36 % CPU at most) and billing (7 %) stayed at 1 task, as expected.
-
-### 6.12 Security
-
-```bash
-# HTTP is redirected to HTTPS
-curl -sI "${APP_URL/https:/http:}/health" | head -1                 # 301 Moved Permanently
-
-# Requests without a valid token are rejected
-curl -k -i "$APP_URL/api/movies"                                    # 401 Missing bearer token
-curl -k -i -H "Authorization: Bearer fake" "$APP_URL/api/movies"    # 401 Invalid or expired token
-
-# Databases: not public, encrypted
-aws rds describe-db-instances \
-  --query 'DBInstances[].[DBInstanceIdentifier,PubliclyAccessible,StorageEncrypted,EngineVersion]' --output table
-
-# Credentials are in Secrets Manager; each service can read only its own
-aws secretsmanager list-secrets --query 'SecretList[?starts_with(Name,`cloud-design/`)].Name' --output table
-aws iam get-role-policy --role-name cloud-design-inventory-execution \
-  --policy-name cloud-design-inventory-read-secrets --query 'PolicyDocument.Statement[0].Resource'
-
-# Vulnerability scanning: continuous Inspector scans, findings of the deployed images
-aws ecr get-registry-scanning-configuration \
-  --query 'scanningConfiguration.[scanType,rules[0].scanFrequency]' --output text
-aws inspector2 list-findings --sort-criteria field=SEVERITY,sortOrder=DESC \
-  --filter-criteria '{"ecrImageRepositoryName":[{"comparison":"PREFIX","value":"cloud-design/"}],"ecrImageTags":[{"comparison":"EQUALS","value":"latest"}],"findingStatus":[{"comparison":"EQUALS","value":"ACTIVE"}]}' \
-  --query 'findings[].[resources[0].details.awsEcrContainerImage.repositoryName,severity,title]' --output table
-
-# Cognito: user pool, password policy, app client, users
-POOL=$(aws cognito-idp list-user-pools --max-results 10 \
-  --query "UserPools[?Name=='cloud-design-users'].Id" --output text)
-aws cognito-idp describe-user-pool --user-pool-id $POOL \
-  --query 'UserPool.{name:Name,passwordPolicy:Policies.PasswordPolicy}'
-CLIENT=$(aws cognito-idp list-user-pool-clients --user-pool-id $POOL \
-  --query 'UserPoolClients[0].ClientId' --output text)
-aws cognito-idp describe-user-pool-client --user-pool-id $POOL --client-id $CLIENT \
-  --query 'UserPoolClient.{name:ClientName,authFlows:ExplicitAuthFlows,accessTokenMinutes:AccessTokenValidity}'
-aws cognito-idp list-users --user-pool-id $POOL --query 'Users[].[Username,UserStatus]' --output table
-```
-
-About the scan results: when a finding has a fixed version, update the
-package (in the service's `requirements.txt` or its Dockerfile) and push the
-image again; Inspector scans the new image automatically. The remaining
-critical finding is in rabbit-queue: Debian 12 ships RabbitMQ 3.10.8 and has
-no fixed version yet. Moving to a newer RabbitMQ means a major upgrade, which
-can't open the queue data already stored on EFS, so it is planned as a
-separate migration. Until then the risk is limited: RabbitMQ is reachable
-only from the app tasks in the private subnets and needs a password.
-
-### 6.13 Bonus
-
-Beyond the required parts:
-
-- Continuous vulnerability scanning with Amazon Inspector
-- A CloudWatch dashboard and 13 alarms with email alerts
-- A k6 load test with measured results, scaling timeline and tuning decisions
-- Deployment circuit breaker: a failing new version is rolled back automatically
-- ECS Exec: a shell inside a running container for debugging
-- RabbitMQ publisher confirms and data on EFS: an accepted order is never lost
-- A local Docker Compose stack with an end-to-end billing test
-- An OpenAPI description of the API and a Postman collection with automatic checks
-
-## 7. Testing with Postman
-
-[postman/cloud-design.postman_collection.json](postman/cloud-design.postman_collection.json)
-has 14 requests with automatic checks, in 4 folders:
-
-| Folder | Requests |
-|--------|----------|
-| 1. Sign in | Gets a Cognito access token and saves it for all the other requests |
-| 2. Security checks | `/health` without a token (200), movies without a token (401), with a fake token (401) |
-| 3. Movies | Create (201), list, get by id, search, update (200), create without a title (400), delete, get the deleted movie (404) |
-| 4. Billing | Send an order (200 Message posted), an order with missing fields (400) |
-
-1. Get the values the collection needs:
-
-   ```bash
-   # base_url
-   echo "https://$(aws elbv2 describe-load-balancers --names cloud-design-alb \
-     --query 'LoadBalancers[0].DNSName' --output text)"
-
-   # cognito_client_id, username and password of the test user
-   aws secretsmanager get-secret-value --secret-id cloud-design/cognito-test-user \
-     --query SecretString --output text
-   ```
-
-2. In Postman: **Import** → choose the file. Open the collection, go to the
-   **Variables** tab and fill `base_url`, `cognito_client_id`, `username` and
-   `password`. Type the password only as the *current* (local) value, not
-   as the initial or shared value: the local value stays on your computer
-   and is never exported with the collection. Save.
-3. Run **1. Sign in → Get access token**. The token is saved in
-   `access_token` and is valid 60 minutes; run it again when requests
-   start getting 401.
-4. Run the other requests one by one, or the whole collection with
-   **Run collection**. Each request's **Test Results** tab shows its checks.
-
-The requests to the load balancer don't verify its certificate, because it
-is self-signed when no domain is set. If Postman still reports a certificate
-error, turn off **Settings → General → SSL certificate verification**.
-
-For the billing resilience test (6.7), stop billing-app with the step 1
-commands, send **4. Billing → Send a billing order** from Postman, then run
-steps 3 and 4.
-
-The collection deletes only the movie it creates. `DELETE /api/movies`,
-which deletes every movie, is left out on purpose.
-
-## 8. Docker images
+## 6. Docker images
 
 The first version of inventory-app and billing-app was a single stage on
 `debian:12-slim` with Python installed through `apt-get`. Now every Python
