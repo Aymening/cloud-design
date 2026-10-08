@@ -11,7 +11,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-secret_name=$(terraform -chdir=terraform/houda/platform output -raw test_user_secret_name)
+# On a machine without the platform module's Terraform state, the output is
+# empty: fall back to the secret's default name.
+secret_name=$(terraform -chdir=terraform/houda/platform output -raw test_user_secret_name 2>/dev/null)
+secret_name=${secret_name:-cloud-design/cognito-test-user}
 
 request_file=$(mktemp) # created with mode 600: only you can read it
 trap 'rm -f "$request_file"' EXIT
