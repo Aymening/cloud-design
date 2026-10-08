@@ -8,11 +8,11 @@ is down.
 
 | Section | What you find there |
 |---------|---------------------|
-| [1. Architecture](#1-architecture) | What runs where, with diagrams |
+| [1. Architecture](#1-architecture) | What runs where, with diagrams, and the monitoring |
 | [2. Design decisions](#2-design-decisions) | Why it is built this way, problems we solved, what we would change |
 | [3. Project files](#3-project-files) | What every file in the repository does |
 | [4. Prerequisites and configuration](#4-prerequisites-and-configuration) | Tools, AWS access, settings |
-| [5. Commands](#5-commands) | Deploy, update, load test, debug, tear down |
+| [5. Commands](#5-commands) | Deploy, update, use the API, load test, debug, tear down |
 | [6. Docker images](#6-docker-images) | How the images were optimized, sizes and build times |
 
 Using AWS step by step, the commands for the audit and the Postman
@@ -160,6 +160,52 @@ subnets, and each security group accepts traffic only from the tier in
 front of it. Outbound traffic from the private subnets (image pulls,
 Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 
+### Monitoring and logging
+
+Everything is in Amazon CloudWatch: the dashboard and the alarms come from
+`terraform/aymen/05-monitoring`, the logs from the ECS task definitions.
+
+**Dashboard** `cloud-design-overview` (CloudWatch → **Dashboards**), 14 graphs:
+
+| Graphs | What they show |
+|--------|----------------|
+| Requests per minute, Response time, HTTP errors per minute | Traffic at the load balancer, response time (p95 and average), and errors: 5xx from the app, 5xx from the load balancer, 4xx |
+| api-gateway targets | Healthy and unhealthy gateway tasks behind the load balancer |
+| Running tasks per service, Service CPU, Service memory | Each ECS service's number of tasks (auto-scaling at work) and its resource use |
+| Billing orders saved per minute, App errors (latest 50) | Queries on the application logs: orders written to billing-db, and the latest errors |
+| RDS CPU, RDS free storage, RDS connections | Both databases |
+| rabbit-queue error count, rabbit-queue recent logs | The broker's health |
+
+**Alarms** (CloudWatch → **Alarms**): each one emails `alert_email` through
+Amazon SNS when it fires.
+
+| Alarm | Fires when |
+|-------|------------|
+| `cloud-design-api-gateway-no-healthy-tasks` | No healthy gateway task behind the load balancer for 2 minutes: the API is down |
+| `cloud-design-app-5xx-errors` | More than 10 server errors (5xx) in 5 minutes |
+| `cloud-design-<service>-not-running` (4 alarms) | api-gateway, inventory, billing or rabbit-queue has had no running task for 3 minutes |
+| `cloud-design-<db>-db-high-cpu` (2 alarms) | A database's CPU stays above 80 % for 3 minutes |
+| `cloud-design-<db>-db-low-storage` (2 alarms) | A database has less than 2 GB of free storage |
+| `cloud-design-<db>-db-high-connections` (2 alarms) | A database has more than 50 connections for 3 minutes |
+| `cloud-design-rabbitmq-errors` | RabbitMQ logged at least one error in 5 minutes |
+
+Auto-scaling adds its own `TargetTracking-*` alarms, which start its
+scaling policies.
+
+**Logs** (CloudWatch → **Log groups**):
+
+| Log group | Contains | Kept |
+|-----------|----------|------|
+| `/ecs/cloud-design` | The app containers' output, one stream per task (prefixes `api-gateway`, `inventory`, `billing`): every HTTP request, the billing orders received and saved, the errors | 7 days |
+| `/ecs/cloud-design-rabbit-queue` | RabbitMQ's logs | 14 days |
+
+The alarms tell the team that something is wrong; the dashboard and the logs
+show where. For example, the logs and the reasons ECS gives for stopped tasks
+showed billing-app crashing while RabbitMQ was being replaced, which was then
+fixed. The commands to read logs and alarms are in section 5.7, and graphs
+taken during the load test are in
+[terraform/aymen/05-monitoring/README.md](terraform/aymen/05-monitoring/README.md#screenshots).
+
 ## 2. Design decisions
 
 ### Scalability
@@ -236,7 +282,7 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
   14 days.
 - The biggest fixed costs are the NAT gateway, the load balancer and the two
   RDS instances, all billed per hour, so everything is destroyed with
-  `terraform destroy` after testing (section 5.7).
+  `terraform destroy` after testing (section 5.8).
 
 ### Simplicity
 
@@ -412,7 +458,7 @@ one's IDs reads them from that module's state file (`terraform_remote_state`).
 
 | File | What it does |
 |------|--------------|
-| `dashboard.tf` | The CloudWatch dashboard `cloud-design-overview` (14 graphs) |
+| `dashboard.tf` | The CloudWatch dashboard `cloud-design-overview` (14 graphs, see [Monitoring and logging](#monitoring-and-logging)) |
 | `app_alarms.tf` | Alarms: no healthy gateway task, too many server errors (5xx), a service with no running task |
 | `rds_alarms.tf` | Alarms per database: high CPU, low free storage, too many connections |
 | `log_alarms.tf` | Counts errors in RabbitMQ's logs and raises an alarm on any |
@@ -588,7 +634,45 @@ aws cognito-idp admin-set-user-password --user-pool-id $POOL --username someone@
   --password '<a strong password>' --permanent
 ```
 
-### 5.5 Load test
+### 5.5 Use the API
+
+With `APP_URL` and `AUTH` from 5.4:
+
+```bash
+# Create a movie: 201, and the movie with its new id
+curl -k -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"title": "Inception", "description": "Dreams within dreams"}' "$APP_URL/api/movies"
+
+# List all movies, get one by its id, search by title: 200
+curl -k -H "$AUTH" "$APP_URL/api/movies"
+curl -k -H "$AUTH" "$APP_URL/api/movies/<id>"
+curl -k -H "$AUTH" "$APP_URL/api/movies?title=incep"
+
+# Update a movie (only the fields sent change), then delete it: 200
+curl -k -X PUT -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"description": "A film by Christopher Nolan"}' "$APP_URL/api/movies/<id>"
+curl -k -X DELETE -H "$AUTH" "$APP_URL/api/movies/<id>"
+
+# Send a billing order: 200 {"message": "Message posted"} once RabbitMQ has stored it
+curl -k -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"user_id": "3", "number_of_items": 5, "total_amount": 180}' "$APP_URL/api/billing"
+```
+
+Replace `<id>` with the id returned when the movie was created. Careful:
+`DELETE /api/movies`, without an id, deletes every movie.
+
+| Answer | Meaning |
+|--------|---------|
+| 401 | No token, or a token that is invalid or expired: get a new one with `scripts/get-token.sh` |
+| 400 | Missing or wrong data: a movie without a title, or a billing order with a missing field, `number_of_items` below 1 or a negative `total_amount` |
+| 404 | No movie with this id |
+| 503 | inventory-app or RabbitMQ can't be reached at the moment |
+
+The same requests, with automatic checks, are in the Postman collection
+([COMMANDS.md](COMMANDS.md#214-testing-with-postman)), and every endpoint is
+described in [openapi.yaml](openapi.yaml).
+
+### 5.6 Load test
 
 ```bash
 # terminal 1: record task counts and CPU every 30 s (Ctrl+C to stop)
@@ -602,7 +686,7 @@ PEAK_RPS=120 load-test/run-load-test.sh   # a higher peak
 The scenarios, the results and the tuning decisions are in
 [load-test/README.md](load-test/README.md).
 
-### 5.6 Logs and debugging
+### 5.7 Logs and debugging
 
 ```bash
 CLUSTER=cloud-design-cluster
@@ -629,7 +713,7 @@ aws ecs execute-command --cluster $CLUSTER --task $TASK --container inventory-ap
 How to install the Session Manager plugin without root is in
 [terraform/houda/platform/README.md](terraform/houda/platform/README.md#cluster-access-task-6).
 
-### 5.7 Tear down
+### 5.8 Tear down
 
 The NAT gateway, the load balancer, the databases and the running tasks are
 billed per hour. Check the spending in **Billing and Cost Management → Cost
