@@ -10,6 +10,7 @@ resource "aws_ecs_task_definition" "rabbit_queue" {
   cpu                      = var.cpu
   memory                   = var.memory
   execution_role_arn       = aws_iam_role.rabbitmq_task_execution.arn
+  task_role_arn            = aws_iam_role.rabbitmq_task.arn
 
   volume {
     name = "rabbitmq-data"

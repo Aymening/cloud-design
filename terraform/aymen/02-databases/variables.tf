@@ -10,10 +10,13 @@ variable "project_name" {
   default     = "cloud-design"
 }
 
+# RDS only offers recent minor versions (16.4 is gone), and Terraform can't
+# move a running database to an older one: keep this equal to the version the
+# databases run (aws rds describe-db-instances --query 'DBInstances[].EngineVersion').
 variable "engine_version" {
   description = "PostgreSQL engine version for both databases"
   type        = string
-  default     = "16.4"
+  default     = "16.15"
 }
 
 variable "instance_class" {
