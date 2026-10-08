@@ -23,7 +23,7 @@ output "inventory_db_identifier" {
   # NOT .id - that returns AWS's internal DbiResourceId (e.g. "db-XYZ...").
   # CloudWatch's DBInstanceIdentifier dimension needs the human-readable
   # identifier instead, confirmed via `aws rds describe-db-instances`.
-  value       = aws_db_instance.inventory_db.identifier
+  value = aws_db_instance.inventory_db.identifier
 }
 
 output "billing_db_identifier" {
