@@ -39,14 +39,10 @@ terraform plan -var-file=terraform.tfvars
 terraform apply -var-file=terraform.tfvars
 ```
 
-## Verifying message consumption locally (not AWS - see scripts/)
+## Verifying message consumption
 
-Before any of this touches AWS, `scripts/test-billing-consumer.sh` (repo
-root) proves the actual application logic works: it publishes a message onto
-`billing_queue` the same way `api-gateway-app` does, then checks that
-`billing-app` consumed it and wrote the row to `billing-db`. Run it with:
-
-```bash
-cp .env.example .env   # first time only
-./scripts/test-billing-consumer.sh
-```
+The billing queue resilience test in
+[COMMANDS.md](../../../COMMANDS.md#27-billing-queue-resilience) proves it end
+to end on AWS: an order sent while billing-app is stopped waits in
+`billing_queue`, and billing-app consumes it and writes it to billing-db
+once it is back.

@@ -12,7 +12,7 @@ is down.
 | [2. Design decisions](#2-design-decisions) | Why it is built this way, problems we solved, what we would change |
 | [3. Project files](#3-project-files) | What every file in the repository does |
 | [4. Prerequisites and configuration](#4-prerequisites-and-configuration) | Tools, AWS access, settings |
-| [5. Commands](#5-commands) | Deploy, update, run locally, load test, debug, tear down |
+| [5. Commands](#5-commands) | Deploy, update, load test, debug, tear down |
 | [6. Docker images](#6-docker-images) | How the images were optimized, sizes and build times |
 
 Using AWS step by step, the commands for the audit and the Postman
@@ -236,7 +236,7 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
   14 days.
 - The biggest fixed costs are the NAT gateway, the load balancer and the two
   RDS instances, all billed per hour, so everything is destroyed with
-  `terraform destroy` after testing (section 5.8).
+  `terraform destroy` after testing (section 5.7).
 
 ### Simplicity
 
@@ -257,8 +257,6 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 | RDS no longer offered PostgreSQL 16.4 | Use 16.15, the version the databases run |
 | Amazon Inspector showed no findings for the deployed images | Docker and Podman pushed an image index, which Inspector can't scan: `push-images.sh` now pushes plain images |
 | billing-app kept taking orders for 30 s after ECS stopped it (Python running as PID 1 ignores SIGTERM), and crashed while RabbitMQ was being replaced | It now stops at once on SIGTERM and retries the connection instead of crashing |
-| Docker Compose waited forever with Podman | Podman's default image format drops `HEALTHCHECK`: build with `BUILDAH_FORMAT=docker` |
-| On a first local start, the apps sometimes connected while the database was still restarting after its first-boot setup | `restart: on-failure:5` on the apps in `docker-compose.yml` |
 | A load test reported a p95 latency of 3 s | The laptop running k6 had gone to sleep; with sleep turned off, p95 was 89 ms |
 | The Terraform state was on one laptop, and fixes made there during deployment weren't committed | Everything is committed now; next time the state goes to S3 (below) |
 
@@ -294,8 +292,6 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 | `README.md` | This document |
 | `COMMANDS.md` | Using AWS step by step, the commands for the audit, and how to use the Postman collection |
 | `Tasks.md` | How the work was split into 10 tasks between the two team members |
-| `docker-compose.yml` | Runs the backend locally: inventory-db, billing-db, rabbit-queue, inventory-app, billing-app. The gateway isn't included: it needs a Cognito user pool, so it is tested on AWS |
-| `.env.example` | Example settings for Docker Compose (database and RabbitMQ users, passwords, names). Copy it to `.env`, which git ignores |
 | `.gitignore` | Keeps secrets and generated files out of git: `.env`, `*.tfvars`, Terraform state and `.terraform/` folders, plan files, load-test results |
 | `.dockerignore` | Keeps everything except the source code out of the Docker build context: faster builds, and no state files or `.env` in images |
 | `openapi.yaml` | OpenAPI 3 description of the public API: paths, request bodies, responses, the Bearer token security |
@@ -334,12 +330,11 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 | `app/models.py` | The `orders` table: id, user_id, number_of_items, total_amount |
 | `requirements.txt` | pika, Flask (health endpoint), SQLAlchemy, psycopg2, python-dotenv |
 
-**Start scripts**
+**RabbitMQ start script**
 
 | File | What it does |
 |------|--------------|
 | `srcs/rabbit-queue/docker-entrypoint.sh` | RabbitMQ's start script. On the first start it creates the app user from `RABBITMQ_USER`/`RABBITMQ_PASSWORD`, gives it permissions and deletes the default `guest` user. Then it runs RabbitMQ as the `rabbitmq` user |
-| `srcs/database/docker-entrypoint.sh` | Start script of the local PostgreSQL images. On the first start it creates the data folder, the user, the password and the database. Then it runs PostgreSQL as the `postgres` user |
 
 ### `Dockerfiles/`
 
@@ -349,7 +344,6 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 | `inventory-app/Dockerfile` | Same pattern, port 8080 |
 | `billing-app/Dockerfile` | Same pattern, runs `python server.py` |
 | `rabbit-queue/Dockerfile` | `debian:12-slim` with Debian's `rabbitmq-server` and the latest security updates; node name `rabbit@localhost`; health check with `rabbitmq-diagnostics` |
-| `inventory-db/Dockerfile`, `billing-db/Dockerfile` | `debian:12-slim` with PostgreSQL 15, for the local Docker Compose stack only. On AWS the databases are RDS |
 
 ### `scripts/`
 
@@ -357,8 +351,6 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 |------|--------------|
 | `push-images.sh` | Builds the 4 images for linux/amd64 and pushes them to ECR. Works with Docker or Podman |
 | `get-token.sh` | Prints a Cognito access token (valid 60 minutes) for the test user. Reads the password from Secrets Manager without showing it |
-| `smoke-test.sh` | Local: builds and starts Docker Compose, checks the `/health` of inventory-app and billing-app, then removes everything |
-| `test-billing-consumer.sh` | Local: puts a test order on the queue and checks that billing-app saved it in billing-db |
 
 ### `load-test/`
 
@@ -596,28 +588,7 @@ aws cognito-idp admin-set-user-password --user-pool-id $POOL --username someone@
   --password '<a strong password>' --permanent
 ```
 
-### 5.5 Run locally with Docker Compose
-
-```bash
-cp .env.example .env              # first time only
-docker compose up -d --build      # build and start the 5 containers
-docker ps                         # every container should be "(healthy)"
-curl localhost:8081/health        # inventory-app
-curl localhost:8082/health        # billing-app
-docker compose logs -f            # follow the logs (Ctrl+C to stop)
-docker compose down --volumes     # stop and remove everything
-
-scripts/smoke-test.sh             # build, start, check both /health, remove
-scripts/test-billing-consumer.sh  # end to end: a queued order ends up in billing-db
-```
-
-inventory-app is on `localhost:8081`, billing-app on `localhost:8082` and
-RabbitMQ on `localhost:5672`. With Podman instead of Docker, run
-`export BUILDAH_FORMAT=docker` first: Podman's default image format drops
-the Dockerfiles' `HEALTHCHECK`, and Compose then waits forever for the
-databases to become healthy.
-
-### 5.6 Load test
+### 5.5 Load test
 
 ```bash
 # terminal 1: record task counts and CPU every 30 s (Ctrl+C to stop)
@@ -631,7 +602,7 @@ PEAK_RPS=120 load-test/run-load-test.sh   # a higher peak
 The scenarios, the results and the tuning decisions are in
 [load-test/README.md](load-test/README.md).
 
-### 5.7 Logs and debugging
+### 5.6 Logs and debugging
 
 ```bash
 CLUSTER=cloud-design-cluster
@@ -658,7 +629,7 @@ aws ecs execute-command --cluster $CLUSTER --task $TASK --container inventory-ap
 How to install the Session Manager plugin without root is in
 [terraform/houda/platform/README.md](terraform/houda/platform/README.md#cluster-access-task-6).
 
-### 5.8 Tear down
+### 5.7 Tear down
 
 The NAT gateway, the load balancer, the databases and the running tasks are
 billed per hour. Check the spending in **Billing and Cost Management → Cost
@@ -703,12 +674,11 @@ Other choices that keep builds fast and images small and safe:
   change reuses the cached package layer and rebuilds in a few seconds.
 - The Python base is pinned to a Debian release (`-trixie`), so it can't
   change without a Dockerfile change.
-- rabbit-queue and the database images run `apt-get upgrade` to get
-  Debian's latest security fixes.
-- The apps run as a non-root user. rabbit-queue and the databases start as
-  root only to prepare their data folder, then run as `rabbitmq` or
-  `postgres`.
+- rabbit-queue runs `apt-get upgrade` to get Debian's latest security
+  fixes.
+- The apps run as a non-root user. rabbit-queue starts as root only to
+  prepare its data folder, then runs as `rabbitmq`.
 - `.dockerignore` keeps everything but `srcs/` out of the build context.
   Without it, every build would first send over a gigabyte of `.terraform`
-  provider folders to the builder, plus the Terraform state (which holds
-  passwords) and `.env`.
+  provider folders to the builder, plus the Terraform state, which holds
+  passwords.

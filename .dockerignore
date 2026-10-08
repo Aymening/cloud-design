@@ -9,6 +9,5 @@ scripts
 **/*.md
 **/__pycache__
 **/*.pyc
-docker-compose.yml
 openapi.yaml
 postman

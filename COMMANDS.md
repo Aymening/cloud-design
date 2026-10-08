@@ -20,7 +20,7 @@ repository root (the `cloud-design` folder), unless a `cd` says otherwise.
 |------|----------|----------------|
 | AWS CLI v2 | Talking to AWS from the terminal | `aws --version` |
 | Terraform 1.5 or newer | Creating the AWS resources described in the `.tf` files | `terraform version` |
-| Docker or Podman | Building the images, running the project locally | `docker --version` |
+| Docker or Podman | Building the images | `docker --version` |
 | git, curl, Python 3 | Getting the code, calling the API, small scripts | `git --version` |
 
 On macOS, with Homebrew (Docker: install Docker Desktop):
@@ -294,27 +294,7 @@ aws ecs execute-command --cluster $CLUSTER --task $TASK --container inventory-ap
 How to install the Session Manager plugin without root is in
 [terraform/houda/platform/README.md](terraform/houda/platform/README.md#cluster-access-task-6).
 
-### Step 11. Run the project locally
-
-```bash
-cp .env.example .env              # first time only
-docker compose up -d --build      # build and start the 5 containers
-docker ps                         # every container should be "(healthy)"
-curl localhost:8081/health        # inventory-app
-curl localhost:8082/health        # billing-app
-docker compose logs -f            # follow the logs (Ctrl+C to stop)
-docker compose down --volumes     # stop and remove everything
-
-scripts/smoke-test.sh             # build, start, check both /health, remove
-scripts/test-billing-consumer.sh  # end to end: a queued order ends up in billing-db
-```
-
-The local stack runs everything but the gateway, which needs Cognito. With
-Podman instead of Docker, run `export BUILDAH_FORMAT=docker` first: Podman's
-default image format drops the Dockerfiles' `HEALTHCHECK`, and Compose then
-waits forever for the databases to become healthy.
-
-### Step 12. Load test
+### Step 11. Load test
 
 ```bash
 # terminal 1: task counts and CPU every 30 s (Ctrl+C to stop)
@@ -326,7 +306,7 @@ load-test/run-load-test.sh
 
 The results are in [load-test/README.md](load-test/README.md).
 
-### Step 13. Check the costs and delete everything
+### Step 12. Check the costs and delete everything
 
 The NAT gateway, the load balancer, the databases and the running tasks are
 billed per hour. Check the spending in **Billing and Cost Management → Cost
@@ -369,8 +349,8 @@ ls
 ls srcs Dockerfiles scripts terraform/aymen terraform/houda
 ```
 
-Expected: this README, the source code of the 4 services, the Dockerfiles,
-the deployment scripts, the 6 Terraform modules and `docker-compose.yml`.
+Expected: README.md and this file, the source code of the 4 services, the
+Dockerfiles, the deployment scripts and the 6 Terraform modules.
 Part 3 below explains every file.
 
 ### 2.3 The deployment
@@ -399,9 +379,9 @@ aws logs filter-log-events --log-group-name /ecs/cloud-design \
   --query 'events[].[logStreamName,message]' --output text
 ```
 
-`docker ps` applies to the local stack ([step 11](#step-11-run-the-project-locally)):
-`docker compose up -d --build`, then `docker ps` shows the 5 containers
-`(healthy)`.
+`docker ps` doesn't apply in the cloud: on Fargate, AWS runs the containers
+on its own servers, and `aws ecs describe-tasks` above is the way to see
+them. To still show `docker ps`, run an image on your computer (2.9).
 
 ### 2.4 Load balancing
 
@@ -579,7 +559,19 @@ aws ecs describe-services --cluster $CLUSTER --services inventory-service \
   --query 'services[0].{launchType:launchType,taskDefinition:taskDefinition,circuitBreaker:deploymentConfiguration.deploymentCircuitBreaker,publicIp:networkConfiguration.awsvpcConfiguration.assignPublicIp,subnets:networkConfiguration.awsvpcConfiguration.subnets}'
 ```
 
-Locally, `docker images` shows the image sizes after `docker compose build`.
+Build and run an image on your computer. RabbitMQ is the one that runs on
+its own (the apps need their databases):
+
+```bash
+# With Podman instead of Docker: export BUILDAH_FORMAT=docker first (keeps the HEALTHCHECK)
+time docker build -f Dockerfiles/rabbit-queue/Dockerfile -t rabbit-queue .
+docker images rabbit-queue
+docker run -d --name rabbit-queue-test -e RABBITMQ_USER=demo \
+  -e RABBITMQ_PASSWORD=demo-password -e RABBITMQ_QUEUE=billing_queue rabbit-queue
+docker ps                          # "(healthy)" after about 15 seconds
+docker rm -f rabbit-queue-test
+```
+
 [README.md, section 6](README.md#6-docker-images) has the build times and
 sizes before and after optimization.
 
@@ -696,7 +688,6 @@ Beyond the required parts:
 - Deployment circuit breaker: a failing new version is rolled back automatically
 - ECS Exec: a shell inside a running container for debugging
 - RabbitMQ publisher confirms and data on EFS: an accepted order is never lost
-- A local Docker Compose stack with an end-to-end billing test
 - An OpenAPI description of the API and a Postman collection with automatic checks
 
 ### 2.14 Testing with Postman
@@ -754,8 +745,6 @@ which deletes every movie, is left out on purpose.
 | `README.md` | The project documentation: architecture, design decisions, configuration, commands, Docker images |
 | `COMMANDS.md` | This file: using AWS step by step, the audit commands, what every file does |
 | `Tasks.md` | How the work was split into 10 tasks between the two team members |
-| `docker-compose.yml` | Runs the backend locally: inventory-db, billing-db, rabbit-queue, inventory-app, billing-app. The gateway isn't included: it needs a Cognito user pool, so it is tested on AWS |
-| `.env.example` | Example settings for Docker Compose (database and RabbitMQ users, passwords, names). Copy it to `.env`, which git ignores |
 | `.gitignore` | Keeps secrets and generated files out of git: `.env`, `*.tfvars`, Terraform state and `.terraform/` folders, plan files, load-test results |
 | `.dockerignore` | Keeps everything except the source code out of the Docker build context: faster builds, and no state files or `.env` in images |
 | `openapi.yaml` | OpenAPI 3 description of the public API: paths, request bodies, responses, the Bearer token security |
@@ -794,12 +783,11 @@ which deletes every movie, is left out on purpose.
 | `app/models.py` | The `orders` table: id, user_id, number_of_items, total_amount |
 | `requirements.txt` | pika, Flask (health endpoint), SQLAlchemy, psycopg2, python-dotenv |
 
-**Start scripts**
+**RabbitMQ start script**
 
 | File | What it does |
 |------|--------------|
 | `srcs/rabbit-queue/docker-entrypoint.sh` | RabbitMQ's start script. On the first start it creates the app user from `RABBITMQ_USER`/`RABBITMQ_PASSWORD`, gives it permissions and deletes the default `guest` user. Then it runs RabbitMQ as the `rabbitmq` user |
-| `srcs/database/docker-entrypoint.sh` | Start script of the local PostgreSQL images. On the first start it creates the data folder, the user, the password and the database. Then it runs PostgreSQL as the `postgres` user |
 
 ### `Dockerfiles/`
 
@@ -809,7 +797,6 @@ which deletes every movie, is left out on purpose.
 | `inventory-app/Dockerfile` | Same pattern, port 8080 |
 | `billing-app/Dockerfile` | Same pattern, runs `python server.py` |
 | `rabbit-queue/Dockerfile` | `debian:12-slim` with Debian's `rabbitmq-server` and the latest security updates; node name `rabbit@localhost`; health check with `rabbitmq-diagnostics` |
-| `inventory-db/Dockerfile`, `billing-db/Dockerfile` | `debian:12-slim` with PostgreSQL 15, for the local Docker Compose stack only. On AWS the databases are RDS |
 
 ### `scripts/`
 
@@ -817,8 +804,6 @@ which deletes every movie, is left out on purpose.
 |------|--------------|
 | `push-images.sh` | Builds the 4 images for linux/amd64 and pushes them to ECR. Works with Docker or Podman |
 | `get-token.sh` | Prints a Cognito access token (valid 60 minutes) for the test user. Reads the password from Secrets Manager without showing it |
-| `smoke-test.sh` | Local: builds and starts Docker Compose, checks the `/health` of inventory-app and billing-app, then removes everything |
-| `test-billing-consumer.sh` | Local: puts a test order on the queue and checks that billing-app saved it in billing-db |
 
 ### `load-test/`
 
