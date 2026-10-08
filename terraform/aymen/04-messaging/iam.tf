@@ -33,10 +33,9 @@ resource "aws_iam_role_policy" "rabbitmq_read_secret" {
   policy = data.aws_iam_policy_document.rabbitmq_read_secret.json
 }
 
-# Separate from the execution role above: this is the role the *application*
-# runs as, which EFS checks when the volume uses IAM authorization. Found
-# out by actually deploying - ECS rejected the task definition with
-# "EFS IAM authorization requires a task role" until this existed.
+# Task role: the running container's identity. With EFS IAM authorization
+# enabled (task_definition.tf), ECS mounts the volume with this role, so it
+# may only mount and write the file system through the RabbitMQ access point.
 resource "aws_iam_role" "rabbitmq_task" {
   name               = "${var.project_name}-rabbitmq-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume_role.json
@@ -49,6 +48,7 @@ data "aws_iam_policy_document" "rabbitmq_efs_access" {
       "elasticfilesystem:ClientWrite",
     ]
     resources = [aws_efs_file_system.rabbitmq.arn]
+
     condition {
       test     = "StringEquals"
       variable = "elasticfilesystem:AccessPointArn"

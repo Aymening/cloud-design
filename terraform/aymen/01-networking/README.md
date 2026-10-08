@@ -13,9 +13,11 @@ resources (databases, containers, load balancer) will attach to.
   internet outbound without being reachable from it inbound
 - 4 security groups, each only trusting the tier in front of it:
   - `alb`: accepts 80/443 from the internet
-  - `app`: accepts 3000 (api-gateway-app) and 8080 (inventory-app/billing-app) from `alb` only
+  - `app`: accepts 3000 (api-gateway-app) from `alb` only. inventory-app and
+    billing-app (8080) are reached through the `services-internal` group
+    created in `terraform/houda/platform`
   - `db`: accepts 5432 (Postgres) from `app` only
-  - `rabbitmq`: accepts 5672 (AMQP) and 15672 (management UI) from `app` only
+  - `rabbitmq`: accepts 5672 (AMQP) from `app` only
 
 ## Usage
 

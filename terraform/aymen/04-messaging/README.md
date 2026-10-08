@@ -11,7 +11,8 @@ topology (single durable queue, default exchange, manual ack/nack).
   so `/var/lib/rabbitmq` survives an ECS task being replaced, not just a
   broker restart
 - 1 Secrets Manager secret with a random-generated RabbitMQ password
-- 1 IAM role for ECS task execution (image pull, logs, reading the secret)
+- 2 IAM roles: task execution (image pull, logs, reading the secret) and
+  task role (mounting the EFS volume through its access point)
 - 1 CloudWatch log group
 - 1 Fargate task definition (`rabbit-queue`), wired to the EFS volume and
   the secret
@@ -23,8 +24,10 @@ topology (single durable queue, default exchange, manual ack/nack).
   needs the networking module (VPC/subnets/security groups) to apply; it
   doesn't need the cluster to exist yet, since IAM roles and task
   definitions aren't tied to any specific cluster.
-- No `rabbit-queue` image in ECR yet - `container_image` defaults to a
-  placeholder; update it once task 6 pushes the image.
+- No image repository - the `rabbit-queue` image is pushed to the ECR
+  repository from `terraform/houda/ecr` and passed in with
+  `-var "container_image=..."` (step 4 of the main README's Deploying
+  section).
 
 ## Usage
 

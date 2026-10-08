@@ -57,9 +57,12 @@ curl -k -H "Authorization: Bearer $TOKEN" "$APP_URL/api/movies"
 
 ## Outputs
 
-`app_url`, `alb_dns_name`, `cluster_name`, `service_names`,
+`app_url`, `alb_dns_name`, `alb_arn_suffix`,
+`api_gateway_target_group_arn_suffix`, `cluster_name`, `service_names`,
 `internal_hostnames`, `log_group_name`, `cognito_user_pool_id`,
-`cognito_client_id`, `test_user_secret_name`.
+`cognito_client_id`, `test_user_secret_name`. The two `*_arn_suffix`
+outputs are read by `terraform/aymen/05-monitoring` for the load balancer
+metrics.
 
 ## Cluster access (task 6)
 

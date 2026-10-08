@@ -1,16 +1,13 @@
 FROM debian:12-slim
 
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends rabbitmq-server \
     && rm -rf /var/lib/apt/lists/*
 
-# rabbit@localhost rather than rabbit@rabbit-queue: docker-compose makes the
-# service name resolve as the container's own hostname automatically, but
-# ECS Fargate (networkMode=awsvpc) does not and forbids setting a custom
-# hostname there. Only in-container tools (rabbitmqctl, diagnostics, the
-# entrypoint's first-boot setup) ever need to resolve this name - external
-# AMQP clients connect over plain TCP and never see it - so localhost always
-# resolving, everywhere, is the portable choice.
+# The node name must resolve inside the container, and on Fargate the task's
+# hostname is not "rabbit-queue", so the node runs as rabbit@localhost. Keep
+# it fixed: RabbitMQ stores its data on EFS in a folder named after the node.
 ENV HOME=/var/lib/rabbitmq \
     RABBITMQ_MNESIA_BASE=/var/lib/rabbitmq/mnesia \
     RABBITMQ_NODENAME=rabbit@localhost

@@ -1,0 +1,13 @@
+# Every image is built with the repository root as context but only copies
+# files from srcs/. Keep everything else out of the build context: it makes
+# builds faster and keeps Terraform state and .env (secrets) out of images.
+.git
+.env
+terraform
+load-test
+scripts
+**/*.md
+**/__pycache__
+**/*.pyc
+docker-compose.yml
+openapi.yaml

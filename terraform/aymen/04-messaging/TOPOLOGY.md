@@ -21,9 +21,16 @@ flowchart LR
   so it survives a broker restart.
 - **Delivery mode**: `delivery_mode=2` (persistent) on publish, so queued
   messages are written to disk, not just kept in memory.
-- **Consumption**: `billing-app` manually acks (`basic_ack`) after a
-  successful DB insert, or nacks without requeue (`basic_nack(requeue=False)`)
-  on error — a poison message is dropped rather than retried forever.
+- **Publisher confirms**: the gateway publishes with `confirm_delivery()`
+  and `mandatory=True`, so it answers `200` only after RabbitMQ has stored
+  the message in the queue, and `503` if it couldn't.
+- **Consumption**: `billing-app` takes one message at a time
+  (`prefetch_count=1`) and acks it (`basic_ack`) only after the DB insert
+  succeeded. If billing-db can't be reached, it nacks with requeue
+  (`basic_nack(requeue=True)`) and waits 5 seconds, so the order is retried
+  until the database is back. A message it can't read (bad JSON, missing
+  fields) is nacked without requeue: it is dropped instead of blocking the
+  queue forever.
 - **Message body**: raw JSON forwarded as-is from the gateway's request body,
   e.g. `{"user_id": "...", "number_of_items": 2, "total_amount": 41.98}`.
 
@@ -32,6 +39,6 @@ flowchart LR
 The queue is durable and messages are persistent, but that only protects
 against a broker *restart* — the data still lives on whatever filesystem the
 container sees. On ECS, a task's local filesystem is ephemeral: if the task
-is replaced, `/var/lib/rabbitmq` is gone with it. Sub-task 3 attaches an EFS
-volume so RabbitMQ's data directory survives task replacement, not just
+is replaced, `/var/lib/rabbitmq` is gone with it. This module attaches an EFS
+volume (`efs.tf`) so RabbitMQ's data directory survives task replacement, not just
 broker restarts.

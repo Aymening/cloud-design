@@ -11,8 +11,11 @@ resource "random_password" "billing_db" {
   override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
+# recovery_window_in_days = 0 so destroy + apply can reuse the same secret
+# names immediately instead of waiting out the default 30 days.
 resource "aws_secretsmanager_secret" "inventory_db" {
-  name = "${var.project_name}/inventory-db"
+  name                    = "${var.project_name}/inventory-db"
+  recovery_window_in_days = 0
 
   tags = {
     Name = "${var.project_name}-inventory-db-secret"
@@ -29,7 +32,8 @@ resource "aws_secretsmanager_secret_version" "inventory_db" {
 }
 
 resource "aws_secretsmanager_secret" "billing_db" {
-  name = "${var.project_name}/billing-db"
+  name                    = "${var.project_name}/billing-db"
+  recovery_window_in_days = 0
 
   tags = {
     Name = "${var.project_name}-billing-db-secret"

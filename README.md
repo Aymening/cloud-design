@@ -15,6 +15,7 @@ members is in [Tasks.md](Tasks.md).
 - [Verifying the deployment](#verifying-the-deployment)
 - [Using the API](#using-the-api)
 - [Billing queue resilience](#billing-queue-resilience)
+- [Monitoring and logging](#monitoring-and-logging)
 - [Load testing and auto-scaling](#load-testing-and-auto-scaling)
 - [Vulnerability scanning](#vulnerability-scanning)
 - [Cost management and tearing down](#cost-management-and-tearing-down)
@@ -49,7 +50,7 @@ flowchart TB
     subgraph managed["Regional AWS services used by the tasks"]
         ecr["ECR + Inspector: images, vulnerability scans"]
         sm["Secrets Manager: credentials"]
-        cw["CloudWatch: logs, scaling alarms"]
+        cw["CloudWatch: logs, dashboard, alarms (email via SNS)"]
         cm["Cloud Map: *.local DNS"]
     end
 
@@ -109,8 +110,9 @@ flowchart TB
   scans every image for known vulnerabilities, and keeps re-checking them.
 - **AWS Secrets Manager**: database, RabbitMQ and test-user credentials,
   given to the containers when they start.
-- **Amazon CloudWatch**: container logs, and the metrics and alarms that
-  drive auto-scaling.
+- **Amazon CloudWatch**: container logs, the metrics and alarms that drive
+  auto-scaling, and a dashboard with alarms that email the team (through
+  Amazon SNS) when a database or RabbitMQ has a problem.
 
 | Component | Terraform module (task) |
 |-----------|-------------------------|
@@ -121,6 +123,7 @@ flowchart TB
 | ECS cluster and services, load balancer, Cloud Map | `terraform/houda/platform` (6, 7) |
 | HTTPS certificate, Cognito, IAM roles | `terraform/houda/platform` (8) |
 | Auto-scaling policies | `terraform/houda/platform` (9) |
+| Dashboard, alarms, alert emails | `terraform/aymen/05-monitoring` (5) |
 
 ### Request flow
 
@@ -148,6 +151,7 @@ sequenceDiagram
         GW-->>C: response
     else POST /api/billing
         GW->>MQ: publish to billing_queue (persistent)
+        MQ-->>GW: confirm: message stored
         GW-->>C: 200 Message posted
         MQ->>B: deliver message
         B->>DB: INSERT order into billing-db
@@ -155,10 +159,13 @@ sequenceDiagram
     end
 ```
 
-Billing is asynchronous: the client gets its answer as soon as the order is
-safely in the queue. If billing-app or billing-db is down, orders wait in
-the queue instead of failing (see
-[Billing queue resilience](#billing-queue-resilience)).
+Billing is asynchronous: the client gets its answer as soon as RabbitMQ
+confirms that it has stored the order in the queue (publisher confirms). If
+billing-app is down, orders wait in the queue instead of failing (see
+[Billing queue resilience](#billing-queue-resilience)). If billing-db is
+down, billing-app puts the order back in the queue and tries again every 5
+seconds until the database is back. An order that can't be read (missing
+fields) is logged and dropped, so it doesn't block the queue.
 
 Routing done by the gateway:
 
@@ -210,7 +217,8 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 - The load balancer spans two availability zones, and when a service runs
   more than one task, ECS spreads them across both. The load balancer only
   sends traffic to tasks that pass `/health`.
-- ECS replaces any task that crashes or fails its container health check,
+- Every service has a container health check (`/health` for the apps, the
+  AMQP port for RabbitMQ). ECS replaces any task that crashes or fails it,
   and removes it from Cloud Map DNS in the meantime.
 - Deployments have a circuit breaker: if the new version keeps failing, ECS
   rolls back to the previous one.
@@ -238,7 +246,8 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
   access token. The gateway checks its signature against the user pool's
   published keys, its expiry and issuer, and that it was issued to this
   app's client (`srcs/api-gateway-app/app/auth.py`). Requests without a
-  valid token get `401`.
+  valid token get `401`. The gateway refuses to start without the user
+  pool settings, so it can never run with authentication turned off.
 - **Private resources:** databases, RabbitMQ and all tasks are in private
   subnets without public IPs; the databases accept connections only from
   the app tasks.
@@ -276,8 +285,9 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 - Each task owner's Terraform is a separate module that can be applied on
   its own. The modules read each other's outputs from state, so no IDs are
   copied by hand.
-- The Python app images are multi-stage builds on `python:3.12-slim`: build
-  tools and pip caches stay in the build stage, which keeps images small.
+- The Python app images are multi-stage builds on
+  `python:3.12-slim-trixie`: build tools and pip caches stay in the build
+  stage, which keeps images small.
 
 ## Repository layout
 
@@ -285,11 +295,12 @@ Secrets Manager, Cognito keys, logs) goes through the NAT gateway.
 |------|----------|
 | `srcs/` | Application source code |
 | `Dockerfiles/` | One Dockerfile per image |
-| `terraform/aymen/` | Networking, databases, messaging (tasks 1, 2, 4) |
+| `terraform/aymen/` | Networking, databases, messaging, monitoring (tasks 1, 2, 4, 5) |
 | `terraform/houda/ecr` | Image repositories and vulnerability scanning (tasks 6, 8) |
 | `terraform/houda/platform` | ECS cluster and services, load balancer, HTTPS, Cognito, IAM, auto-scaling (tasks 6-9) |
-| `scripts/` | Push images to ECR, get an API token |
+| `scripts/` | Push images to ECR (`push-images.sh`), get an API token (`get-token.sh`), check the local Docker Compose stack (`smoke-test.sh`, `test-billing-consumer.sh`) |
 | `load-test/` | k6 load test and scaling monitor (task 9) |
+| `docker-compose.yml`, `LOCAL_TESTING.md` | Run the backend services (all but the gateway, which needs Cognito) locally with Docker Compose and check them with `docker ps` (task 3) |
 
 Each Terraform module has its own README with more detail.
 
@@ -361,7 +372,14 @@ terraform init && terraform apply -var-file=terraform.tfvars \
 cd ../../houda/platform
 terraform init && terraform apply -var-file=terraform.tfvars
 terraform output app_url
+
+# 6. Dashboard and alarms (set alert_email in terraform.tfvars first)
+cd ../../aymen/05-monitoring
+terraform init && terraform apply -var-file=terraform.tfvars
 ```
+
+After step 6, AWS emails `alert_email` a confirmation link: alarm emails
+are only sent once it's clicked.
 
 The services take 2-3 minutes after step 5 to start and pass their health
 checks.
@@ -406,6 +424,9 @@ container with ECS Exec) are in
 ```bash
 cd terraform/houda/platform
 APP_URL=$(terraform output -raw app_url)
+
+# Plain HTTP is redirected to HTTPS
+curl -sI "${APP_URL/https:/http:}/health" | head -1   # HTTP/1.1 301 Moved Permanently
 
 # No token: rejected
 curl -k -i "$APP_URL/api/movies"                  # 401 Missing bearer token
@@ -480,13 +501,41 @@ aws application-autoscaling register-scalable-target --service-namespace ecs \
 aws logs tail /ecs/cloud-design --log-stream-name-prefix billing --since 10m --follow
 ```
 
+## Monitoring and logging
+
+| What | Where | Shows |
+|------|-------|-------|
+| Dashboard `cloud-design-overview` | CloudWatch → **Dashboards** | App: requests per minute, response time (p95), 5xx/4xx errors, healthy gateway targets, running tasks per service, CPU and memory per service, billing orders saved per minute, latest app errors. Databases and queue: RDS CPU, storage and connections, RabbitMQ errors and logs |
+| Alarms with email alerts | CloudWatch → **Alarms**, `cloud-design-*` | API down (no healthy gateway task), more than 10 server errors in 5 minutes, a service with no running task, database CPU above 80 %, free storage below 2 GB, more than 50 connections, any error in the RabbitMQ logs. An alarm emails `alert_email` through SNS |
+| Auto-scaling alarms | CloudWatch → **Alarms**, `TargetTracking-*` | When each app service scales out and in |
+| App service metrics | ECS → cluster → service → **Health and metrics** | CPU, memory and task count of each service |
+| Load balancer metrics | EC2 → **Load balancers** → `cloud-design-alb` → **Monitoring** | Requests, response time, 4xx/5xx errors, healthy targets |
+| Container logs | CloudWatch → **Log groups** | `/ecs/cloud-design` (one stream per task, prefixes `api-gateway`, `inventory`, `billing`, kept 7 days), `/ecs/cloud-design-rabbit-queue` (kept 14 days) |
+
+Graphs of these metrics during the load tests are in
+[terraform/aymen/05-monitoring/README.md](terraform/aymen/05-monitoring/README.md#screenshots).
+
+```bash
+# Dashboard link
+terraform -chdir=terraform/aymen/05-monitoring output -raw dashboard_url
+
+# Alarms and their current state
+aws cloudwatch describe-alarms --alarm-name-prefix cloud-design- \
+  --query 'MetricAlarms[].[AlarmName,StateValue]' --output table
+
+# Errors logged by the app services in the last hour
+aws logs filter-log-events --log-group-name /ecs/cloud-design \
+  --start-time $(( ($(date +%s) - 3600) * 1000 )) --filter-pattern '?ERROR ?Error ?error' \
+  --query 'events[].[logStreamName,message]' --output text
+```
+
 ## Load testing and auto-scaling
 
 `load-test/run-load-test.sh` sends a ramping load through the load balancer
 with k6 (run in a container), while `load-test/watch-scaling.sh` records the
 task count and CPU of each service. The test scenarios, how to run them, and
-the measured results before and after auto-scaling are in
-[load-test/README.md](load-test/README.md).
+the measured results (latency, errors, scaling timeline, CPU at each load
+level, tuning decisions) are in [load-test/README.md](load-test/README.md).
 
 ```bash
 aws application-autoscaling describe-scaling-policies --service-namespace ecs \
@@ -501,11 +550,26 @@ aws application-autoscaling describe-scaling-policies --service-namespace ecs \
 aws ecr describe-image-scan-findings --repository-name cloud-design/api-gateway-app \
   --image-id imageTag=latest --query 'imageScanFindings.findingSeverityCounts'
 
-# All findings for the project's images, most severe first
+# Findings of the deployed images (tag latest), most severe first
 aws inspector2 list-findings --sort-criteria field=SEVERITY,sortOrder=DESC \
-  --filter-criteria '{"ecrImageRepositoryName":[{"comparison":"PREFIX","value":"cloud-design/"}]}' \
-  --query 'findings[].[severity,title]' --output table
+  --filter-criteria '{"ecrImageRepositoryName":[{"comparison":"PREFIX","value":"cloud-design/"}],"ecrImageTags":[{"comparison":"EQUALS","value":"latest"}],"findingStatus":[{"comparison":"EQUALS","value":"ACTIVE"}]}' \
+  --query 'findings[].[resources[0].details.awsEcrContainerImage.repositoryName,severity,title]' --output table
 ```
+
+`scripts/push-images.sh` pushes plain images (not an image index), because
+Inspector can only scan those: otherwise the `latest` tag shows no findings.
+
+When a finding has a fixed version, update the package (in the service's
+`requirements.txt` or its Dockerfile) and push the image again: Inspector
+scans the new image automatically. Findings in Debian base packages that
+have no fix yet stay listed until the base image is updated.
+
+The remaining critical finding is in `rabbit-queue`: Debian 12 ships
+RabbitMQ 3.10.8 and Debian has no fixed version. Moving to a newer RabbitMQ
+means changing major versions, which can't open the queue data already
+stored on EFS, so it is planned as a separate migration. Until then the risk
+is limited: RabbitMQ is only reachable from the app tasks inside the private
+subnets (its security group allows nothing else) and needs a password.
 
 ## Cost management and tearing down
 
@@ -515,7 +579,8 @@ Cost Explorer**, and destroy everything when you are done testing, in
 reverse order:
 
 ```bash
-cd terraform/houda/platform       && terraform destroy -var-file=terraform.tfvars
+cd terraform/aymen/05-monitoring  && terraform destroy -var-file=terraform.tfvars
+cd ../../houda/platform           && terraform destroy -var-file=terraform.tfvars
 cd ../../aymen/04-messaging       && terraform destroy -var-file=terraform.tfvars
 cd ../../houda/ecr                && terraform destroy -var-file=terraform.tfvars
 cd ../../aymen/02-databases       && terraform destroy -var-file=terraform.tfvars

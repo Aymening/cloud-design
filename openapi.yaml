@@ -9,16 +9,53 @@ info:
     API, while billing requests are published to RabbitMQ.
 
 servers:
-  - url: http://localhost:3000
-    description: Public API Gateway endpoint exposed by Docker Compose
+  - url: https://{host}
+    description: >-
+      API Gateway behind the AWS load balancer. Get the address with
+      `terraform -chdir=terraform/houda/platform output -raw app_url`.
+    variables:
+      host:
+        default: cloud-design-alb.eu-west-3.elb.amazonaws.com
+
+# Every /api/* route needs a Cognito access token (scripts/get-token.sh).
+security:
+  - cognitoAccessToken: []
 
 tags:
+  - name: Health
+    description: Gateway status, no token needed
   - name: Movies
     description: Movie inventory operations forwarded to the Inventory API
   - name: Billing
     description: Asynchronous billing message submission
 
 paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Gateway health check
+      description: |
+        Used by the load balancer and the ECS health check. It is the only
+        endpoint that doesn't need a token.
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: The gateway is running.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+              example:
+                status: ok
+                service: api-gateway-app
+
   /api/movies:
     get:
       tags:
@@ -50,6 +87,8 @@ paths:
                 - id: 1
                   title: The Matrix
                   description: A science-fiction movie.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -89,6 +128,8 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: Movie title is required
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -109,6 +150,8 @@ paths:
                 $ref: "#/components/schemas/Message"
               example:
                 message: Successfully deleted all 2 movies.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -133,6 +176,8 @@ paths:
                 $ref: "#/components/schemas/Movie"
         "404":
           $ref: "#/components/responses/MovieNotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -172,6 +217,8 @@ paths:
                 error: Invalid payload
         "404":
           $ref: "#/components/responses/MovieNotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -194,6 +241,8 @@ paths:
                 message: Movie with ID 1 deleted successfully.
         "404":
           $ref: "#/components/responses/MovieNotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -205,9 +254,10 @@ paths:
         - Billing
       summary: Queue a billing order
       description: |
-        Validates the presence of the required fields and publishes the order
-        to the durable RabbitMQ billing queue. Processing is asynchronous, so
-        this operation does not return a stored order. The endpoint also
+        Validates the order and publishes it to the durable RabbitMQ billing
+        queue. It answers 200 once RabbitMQ has confirmed that the message is
+        stored. Processing is asynchronous, so this operation does not return
+        a stored order. The endpoint also
         accepts a trailing slash.
       operationId: queueBillingOrder
       requestBody:
@@ -230,7 +280,9 @@ paths:
               example:
                 message: Message posted
         "400":
-          description: The body is not JSON or a required field is missing.
+          description: >-
+            The body is not JSON, a required field is missing, or
+            number_of_items / total_amount are not valid numbers.
           content:
             application/json:
               schema:
@@ -242,17 +294,32 @@ paths:
                 missingFields:
                   value:
                     error: "Missing required fields: total_amount"
+                invalidValues:
+                  value:
+                    error: number_of_items must be positive and total_amount must be non-negative
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "503":
-          description: The Gateway could not publish the message to RabbitMQ.
+          description: >-
+            RabbitMQ could not be reached or did not confirm that it stored
+            the message. The order was not queued.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
               example:
-                error: Failed to queue billing transaction
-                details: RabbitMQ connection failed
+                error: Billing queue unavailable
 
 components:
+  securitySchemes:
+    cognitoAccessToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Access token of a user of the Cognito user pool. Requests without a
+        valid token get 401.
+
   parameters:
     MovieId:
       name: id
@@ -352,10 +419,27 @@ components:
       properties:
         error:
           type: string
-        details:
-          type: string
 
   responses:
+    Unauthorized:
+      description: The Authorization header is missing, or the token is invalid or expired.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          example: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            missingToken:
+              value:
+                error: Missing bearer token
+            invalidToken:
+              value:
+                error: Invalid or expired token
+
     MovieNotFound:
       description: No movie exists with the supplied ID.
       content:
@@ -380,4 +464,3 @@ components:
             $ref: "#/components/schemas/Error"
           example:
             error: Inventory service unavailable
-            details: Connection to the Inventory API failed

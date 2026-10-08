@@ -5,8 +5,11 @@ resource "random_password" "rabbitmq" {
   override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
+# recovery_window_in_days = 0 so destroy + apply can reuse the same secret
+# name immediately instead of waiting out the default 30 days.
 resource "aws_secretsmanager_secret" "rabbitmq" {
-  name = "${var.project_name}/rabbit-queue"
+  name                    = "${var.project_name}/rabbit-queue"
+  recovery_window_in_days = 0
 
   tags = {
     Name = "${var.project_name}-rabbit-queue-secret"

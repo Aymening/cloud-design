@@ -8,6 +8,16 @@ output "alb_dns_name" {
   value       = aws_lb.main.dns_name
 }
 
+output "alb_arn_suffix" {
+  description = "Load balancer ID used in its CloudWatch metrics (read by the monitoring module)"
+  value       = aws_lb.main.arn_suffix
+}
+
+output "api_gateway_target_group_arn_suffix" {
+  description = "Gateway target group ID used in CloudWatch metrics (read by the monitoring module)"
+  value       = aws_lb_target_group.api_gateway.arn_suffix
+}
+
 output "cluster_name" {
   description = "ECS cluster running every service"
   value       = aws_ecs_cluster.main.name

@@ -36,18 +36,13 @@ resource "aws_security_group" "app" {
   description = "Allow inbound app traffic only from the load balancer"
   vpc_id      = aws_vpc.main.id
 
+  # Only the gateway is behind the load balancer. inventory-app and
+  # billing-app (8080) are reached through the services-internal group
+  # (terraform/houda/platform), never from the load balancer.
   ingress {
     description     = "api-gateway-app from ALB"
     from_port       = 3000
     to_port         = 3000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
-  }
-
-  ingress {
-    description     = "inventory-app / billing-app from ALB"
-    from_port       = 8080
-    to_port         = 8080
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
@@ -94,18 +89,11 @@ resource "aws_security_group" "rabbitmq" {
   description = "Allow inbound AMQP traffic only from the app tier"
   vpc_id      = aws_vpc.main.id
 
+  # AMQP only: the management plugin (port 15672) isn't enabled in the image.
   ingress {
     description     = "AMQP from app tier"
     from_port       = 5672
     to_port         = 5672
-    protocol        = "tcp"
-    security_groups = [aws_security_group.app.id]
-  }
-
-  ingress {
-    description     = "RabbitMQ management UI from app tier"
-    from_port       = 15672
-    to_port         = 15672
     protocol        = "tcp"
     security_groups = [aws_security_group.app.id]
   }

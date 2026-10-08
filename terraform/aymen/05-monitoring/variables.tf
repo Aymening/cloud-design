@@ -32,3 +32,9 @@ variable "db_connections_threshold" {
   type        = number
   default     = 50
 }
+
+variable "app_5xx_threshold" {
+  description = "Number of 5xx responses from the app in 5 minutes that triggers an alarm"
+  type        = number
+  default     = 10
+}

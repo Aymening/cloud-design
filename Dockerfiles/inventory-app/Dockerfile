@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim-trixie AS builder
 
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
@@ -8,11 +8,12 @@ COPY srcs/inventory-app/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 
-FROM python:3.12-slim
+FROM python:3.12-slim-trixie
 
 RUN useradd --create-home appuser
 
-ENV PATH=/opt/venv/bin:$PATH
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv

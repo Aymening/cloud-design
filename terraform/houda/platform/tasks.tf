@@ -7,14 +7,17 @@ locals {
     name => "${name}.${aws_service_discovery_private_dns_namespace.local.name}"
   }
 
-  # Same probe as the Dockerfiles' HEALTHCHECK. ECS uses it to replace broken
-  # tasks and to take them out of Cloud Map DNS.
+  # Same command as the Dockerfiles' HEALTHCHECK (ECS ignores those), run
+  # every 30 s instead of 5 s, keyed by the app's port. ECS uses it to replace
+  # broken tasks and to take them out of Cloud Map DNS.
   container_health_check = {
-    command     = ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)\" || exit 1"]
-    interval    = 30
-    timeout     = 5
-    retries     = 3
-    startPeriod = 120
+    for port in [3000, 8080] : port => {
+      command     = ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${port}/health', timeout=3)\" || exit 1"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 120
+    }
   }
 }
 
@@ -58,6 +61,7 @@ resource "aws_ecs_task_definition" "api_gateway_app" {
         { name = "RABBITMQ_PASSWORD", valueFrom = "${local.rabbitmq_secret_arn}:password::" },
         { name = "RABBITMQ_QUEUE", valueFrom = "${local.rabbitmq_secret_arn}:queue::" },
       ]
+      healthCheck = local.container_health_check[3000]
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -107,7 +111,7 @@ resource "aws_ecs_task_definition" "inventory_app" {
         { name = "INVENTORY_DB_PASSWORD", valueFrom = "${local.inventory_db_secret_arn}:password::" },
         { name = "INVENTORY_DB_NAME", valueFrom = "${local.inventory_db_secret_arn}:dbname::" },
       ]
-      healthCheck = local.container_health_check
+      healthCheck = local.container_health_check[8080]
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -165,7 +169,7 @@ resource "aws_ecs_task_definition" "billing_app" {
         { name = "RABBITMQ_PASSWORD", valueFrom = "${local.rabbitmq_secret_arn}:password::" },
         { name = "RABBITMQ_QUEUE", valueFrom = "${local.rabbitmq_secret_arn}:queue::" },
       ]
-      healthCheck = local.container_health_check
+      healthCheck = local.container_health_check[8080]
       logConfiguration = {
         logDriver = "awslogs"
         options = {

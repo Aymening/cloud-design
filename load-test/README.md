@@ -56,41 +56,70 @@ that auto-scaling created) show the same thing as graphs.
 
 ## Results
 
-To be filled in after running the test on AWS.
+Two runs on 2026-10-06 at `PEAK_RPS=60` with the default settings (CPU
+60 %, 600 req/min per gateway task, 1 to 4 tasks per service). Each run
+started with 1 task per service.
 
-**Before auto-scaling:** with `autoscaling_max_capacity = 1` (one task
-per service), from the k6 summary:
+| Run | Peak req/s | Requests | Failed % | p95 latency | Notes |
+|-----|------------|----------|----------|-------------|-------|
+| 1 | 60 | 48,079 | 0 % | 89 ms | average 61 ms, slowest 1.1 s |
+| 2 | 60 | 48,069 | 0 % | 96 ms | one request took 32 s because of a network drop on the test machine (the load balancer's slowest response that minute was 0.6 s); 11 of about 48,000 requests couldn't start on time |
 
-| Peak req/s | Requests | Failed % | p95 latency | Notes |
-|------------|----------|----------|-------------|-------|
-| | | | | |
+Both runs pass the thresholds (failed < 5 %, p95 < 2 s). An earlier
+attempt reported p95 = 3.08 s, but the laptop running k6 went to sleep
+during the test, so it was not counted. On Linux,
+`systemd-inhibit --what=idle:sleep <command>` keeps the machine awake
+during a run; on macOS, `caffeinate -is <command>`.
 
-**With auto-scaling:** default settings (CPU 60 %, 600 req/min per
-gateway task, max 4 tasks):
-
-| Peak req/s | Requests | Failed % | p95 latency | Notes |
-|------------|----------|----------|-------------|-------|
-| | | | | |
-
-**Scaling timeline** (from `watch-scaling.sh`):
+**Scaling timeline** (run 1, from `watch-scaling.sh` and
+`aws application-autoscaling describe-scaling-activities`):
 
 | Time | Event | api-gateway | inventory | billing |
 |------|-------|-------------|-----------|---------|
-| | test start | 1 | 1 | 1 |
-| | first scale-out | | | |
-| | peak task count | | | |
-| | load stops | | | |
-| | back to 1 task | | | |
+| 0 min | test start | 1 | 1 | 1 |
+| 6.5 min | first scale-out (request count policy) | 3 | 1 | 1 |
+| 7.5 min | peak task count | 4 | 1 | 1 |
+| 17 min | load stops | 4 | 1 | 1 |
+| 33.5 min | first scale-in (16.5 min after the load) | 3 | 1 | 1 |
+| 42 min | back to 1 task (25 min after the load) | 1 | 1 | 1 |
+
+Graphs of requests, running tasks, CPU and response time for both runs are
+in [the monitoring module's README](../terraform/aymen/05-monitoring/README.md#screenshots).
+
+Run 2 scaled out at the same points (3 tasks at 6 min, 4 at 7 min) and
+was back to 1 task 29 min after the load stopped.
+
+**CPU at each load level** (average per service, run 1):
+
+| Load | api-gateway | inventory | billing |
+|------|-------------|-----------|---------|
+| idle | 1 task, 0 % | 1 task, 3 % | 1 task, 2 % |
+| warm-up and ramp (20 to 50 req/s) | 1 task, 17 to 45 % | 1 task, 9 to 14 % | 1 task, 3 to 6 % |
+| 60 req/s, before scale-out | 1 task, 59 to 68 % | 1 task, 22 to 26 % | 1 task, 6 to 7 % |
+| 60 req/s, after scale-out | 4 tasks, about 16 % | 1 task, 26 to 36 % | 1 task, 7 % |
 
 **Tuning decisions:**
 
-- _e.g. "scale-out took N min; lowered gateway_requests_per_target from 600 to ..."_
+- Only the gateway scaled out. It handles every request, so it reached
+  the 60 % CPU target at 1 task. Inventory (36 % at most) and billing (7 %)
+  never got near the target, so they correctly stayed at 1 task.
+- Both scale-outs came from the request count policy (600 req/min per
+  task), when the gateway's CPU was just reaching 60 %. That's what it is
+  for: it adds tasks before CPU becomes the bottleneck. **Kept at 600.**
+- At 60 req/s the request policy asks for 6 gateway tasks (3,600 req/min
+  / 600), but the 4-task maximum was enough: with 4 tasks the gateway ran
+  at about 16 % CPU and p95 stayed under 100 ms. **Kept the maximum at 4**
+  to limit cost.
+- Scale-in removes one task at a time and took 25 to 29 minutes to get
+  back to 1 task. That is slow, but it avoids scaling in and out
+  repeatedly when traffic drops for a short time, and the extra gateway
+  tasks are small (0.25 vCPU). **Kept the cooldowns.**
 
 ## How to read the results
 
-- **Scale-out works** if the task count goes up during the hold phase and
-  the failed rate and p95 latency get better after the new tasks start,
-  compared to the one-task run.
+- **Scale-out works** if the task count goes up during the hold phase,
+  the gateway's CPU drops once the new tasks start, and the failed rate
+  and p95 latency stay under the thresholds.
 - **Scale-in works** if every service goes back to 1 task some time after
   the test ends.
 - If a service reaches its maximum while CPU is still above target, raise

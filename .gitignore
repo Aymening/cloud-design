@@ -17,6 +17,9 @@ override.tf.json
 .terraformrc
 terraform.rc
 
+# Load test output (load-test/run-load-test.sh, watch-scaling.sh)
+load-test/results/
+
 # OS
 .DS_Store
 
