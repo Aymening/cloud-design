@@ -485,6 +485,9 @@ aws application-autoscaling register-scalable-target --service-namespace ecs \
   --suspended-state DynamicScalingInSuspended=true,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=true
 aws ecs update-service --cluster $CLUSTER --service billing-service --desired-count 0 >/dev/null
 aws ecs wait services-stable --cluster $CLUSTER --services billing-service
+# ...and until its task has really exited (it counts as not running as soon as it starts stopping)
+aws ecs wait tasks-stopped --cluster $CLUSTER --tasks $(aws ecs list-tasks --cluster $CLUSTER \
+  --service-name billing-service --desired-status STOPPED --query 'taskArns[]' --output text)
 
 # 2. Send an order: still accepted (200 Message posted), it waits in the queue
 curl -k -H "$AUTH" -H "Content-Type: application/json" \

@@ -12,6 +12,10 @@ cp .env.example .env   # first time only
 ./scripts/smoke-test.sh
 ```
 
+With Podman instead of Docker, run `export BUILDAH_FORMAT=docker` first:
+Podman's default image format drops the Dockerfiles' `HEALTHCHECK`, and
+Compose then waits forever for the databases to become healthy.
+
 The script builds everything, starts it, polls both apps' `/health`
 endpoints for up to a minute, prints their responses, then tears the whole
 stack down (`docker compose down --volumes`).

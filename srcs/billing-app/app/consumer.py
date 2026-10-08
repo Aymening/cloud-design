@@ -1,5 +1,6 @@
 import os
 import json
+import signal
 import time
 from decimal import Decimal
 from threading import Thread
@@ -90,9 +91,18 @@ def process_message(ch, method, _properties, body):
         session.close()
 
 
+def stop_on_sigterm(_signum, _frame):
+    # ECS stops a task with SIGTERM. Python running as PID 1 ignores it by
+    # default, so the task would keep taking orders until ECS kills it 30 s
+    # later. Stop consuming now instead: an order not yet acked goes back to
+    # the queue.
+    raise KeyboardInterrupt
+
+
 def start_consumer():
     global SERVICE_READY
 
+    signal.signal(signal.SIGTERM, stop_on_sigterm)
     start_health_server()
     init_db()
     
@@ -126,7 +136,9 @@ def start_consumer():
             SERVICE_READY = True
             print(f" [*] Billing API service started. Waiting for messages in '{RABBITMQ_QUEUE}'...")
             channel.start_consuming()
-        except pika.exceptions.AMQPError as error:
+        # OSError: rabbit-queue.local doesn't resolve while the broker task is
+        # being replaced, which pika reports as a socket error.
+        except (pika.exceptions.AMQPError, OSError) as error:
             SERVICE_READY = False
             print(f" [!] RabbitMQ not reachable ({error!r}), retrying in 5 seconds...")
         except KeyboardInterrupt:
