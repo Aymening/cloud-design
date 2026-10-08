@@ -11,3 +11,4 @@ scripts
 **/*.pyc
 docker-compose.yml
 openapi.yaml
+postman

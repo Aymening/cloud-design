@@ -1,0 +1,656 @@
+{
+  "info": {
+    "name": "Cloud-Design API",
+    "description": "Requests for the cloud-design API through the load balancer and api-gateway-app. Fill base_url, cognito_client_id and password in the collection variables first (README.md, section Testing with Postman), run '1. Sign in', then the other folders in order, or the whole collection with the Collection Runner.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "",
+      "description": "https://<load balancer DNS name>, from: terraform -chdir=terraform/houda/platform output -raw app_url"
+    },
+    {
+      "key": "region",
+      "value": "eu-west-3"
+    },
+    {
+      "key": "cognito_client_id",
+      "value": "",
+      "description": "client_id in the cloud-design/cognito-test-user secret"
+    },
+    {
+      "key": "username",
+      "value": "loadtest@example.com",
+      "description": "username in the cloud-design/cognito-test-user secret"
+    },
+    {
+      "key": "password",
+      "value": "",
+      "description": "password in the cloud-design/cognito-test-user secret. Put it in Current value only, so it is never exported"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "description": "Set by '1. Sign in > Get access token'"
+    },
+    {
+      "key": "movie_id",
+      "value": "",
+      "description": "Set by '3. Movies > Create a movie'"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Sign in",
+      "item": [
+        {
+          "name": "Get access token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Signed in (200)\", () => pm.response.to.have.status(200));",
+                  "const result = pm.response.json().AuthenticationResult;",
+                  "if (result) {",
+                  "    // Every other request sends this token (collection Authorization: Bearer {{access_token}}).",
+                  "    pm.collectionVariables.set(\"access_token\", result.AccessToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-amz-json-1.1"
+              },
+              {
+                "key": "X-Amz-Target",
+                "value": "AWSCognitoIdentityProviderService.InitiateAuth"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"AuthFlow\": \"USER_PASSWORD_AUTH\",\n  \"ClientId\": \"{{cognito_client_id}}\",\n  \"AuthParameters\": {\n    \"USERNAME\": \"{{username}}\",\n    \"PASSWORD\": \"{{password}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://cognito-idp.{{region}}.amazonaws.com/",
+              "protocol": "https",
+              "host": [
+                "cognito-idp",
+                "{{region}}",
+                "amazonaws",
+                "com"
+              ],
+              "path": [
+                ""
+              ]
+            },
+            "description": "Signs the test user in with Amazon Cognito (the same call as scripts/get-token.sh) and saves the access token, valid 60 minutes, in the access_token variable."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Security checks",
+      "item": [
+        {
+          "name": "Health check, no token needed",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Gateway answers ok\", () => pm.expect(pm.response.json().status).to.eql(\"ok\"));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "The load balancer's health check. The only path that works without a token.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Movies without a token -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Rejected with 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/movies",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "movies"
+              ]
+            },
+            "description": "Every /api/* request needs a Cognito access token: without one the gateway answers 401.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Movies with a fake token -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Rejected with 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/movies",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "movies"
+              ]
+            },
+            "description": "A token that wasn't signed by the Cognito user pool is rejected too.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "not-a-real-token",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Movies",
+      "item": [
+        {
+          "name": "Create a movie",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Created (201)\", () => pm.response.to.have.status(201));",
+                  "const movie = pm.response.json();",
+                  "pm.test(\"Movie has an id\", () => pm.expect(movie.id).to.be.a(\"number\"));",
+                  "pm.collectionVariables.set(\"movie_id\", movie.id);"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/movies",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "movies"
+              ]
+            },
+            "description": "Audit: create a movie through the API gateway. Saves its id in movie_id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Inception\",\n  \"description\": \"Dreams within dreams\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List all movies",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"The new movie is in the list\", () => {",
+                  "    const id = Number(pm.collectionVariables.get(\"movie_id\"));",
+                  "    pm.expect(pm.response.json().map(m => m.id)).to.include(id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/movies",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "movies"
+              ]
+            },
+            "description": "Audit: retrieve the movies through the API gateway."
+          }
+        },
+        {
+          "name": "Get the movie by id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Same movie\", () => pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get(\"movie_id\"))));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/movies/{{movie_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "movies",
+                "{{movie_id}}"
+              ]
+            },
+            "description": "One movie by its id."
+          }
+        },
+        {
+          "name": "Search movies by title",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Every result matches\", () => pm.response.json().forEach(m => pm.expect(m.title.toLowerCase()).to.include(\"incep\")));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/movies?title=incep",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "movies"
+              ],
+              "query": [
+                {
+                  "key": "title",
+                  "value": "incep"
+                }
+              ]
+            },
+            "description": "Movies whose title contains the text (case-insensitive)."
+          }
+        },
+        {
+          "name": "Update the movie",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Description updated\", () => pm.expect(pm.response.json().description).to.eql(\"Updated from Postman\"));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/movies/{{movie_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "movies",
+                "{{movie_id}}"
+              ]
+            },
+            "description": "Changes only the fields that are sent.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated from Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Create a movie without a title -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Rejected with 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/movies",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "movies"
+              ]
+            },
+            "description": "The title is required.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"no title\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Delete the movie",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/movies/{{movie_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "movies",
+                "{{movie_id}}"
+              ]
+            },
+            "description": "Deletes only the movie created above."
+          }
+        },
+        {
+          "name": "Deleted movie is gone -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Not found (404)\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/movies/{{movie_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "movies",
+                "{{movie_id}}"
+              ]
+            },
+            "description": "The movie deleted above can't be found any more."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Billing",
+      "item": [
+        {
+          "name": "Send a billing order",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Accepted (200)\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Order queued\", () => pm.expect(pm.response.json().message).to.eql(\"Message posted\"));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/billing",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "billing"
+              ]
+            },
+            "description": "Audit: the gateway puts the order on the RabbitMQ billing_queue and answers as soon as RabbitMQ has stored it, even when billing-app is stopped. billing-app then saves it in billing-db.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"postman\",\n  \"number_of_items\": 2,\n  \"total_amount\": 19.98\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Billing order with missing fields -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Rejected with 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "strictSSL": false
+          },
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/billing",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "billing"
+              ]
+            },
+            "description": "user_id, number_of_items and total_amount are all required.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
