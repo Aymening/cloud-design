@@ -12,12 +12,10 @@ is down.
 | [2. Design decisions](#2-design-decisions) | Why it is built this way, problems we solved, what we would change |
 | [3. Project files](#3-project-files) | What every file in the repository does |
 | [4. Prerequisites and configuration](#4-prerequisites-and-configuration) | Tools, AWS access, settings |
-| [5. Commands](#5-commands) | Deploy, update, use the API, load test, debug, tear down |
+| [5. Commands](#5-commands) | Deploy, update, use the API, test the billing queue, Postman, load test, debug, tear down |
 | [6. Docker images](#6-docker-images) | How the images were optimized, sizes and build times |
 
-Using AWS step by step, the commands for the audit and the Postman
-collection are in [COMMANDS.md](COMMANDS.md). The task split between the
-two team members is in [Tasks.md](Tasks.md).
+The task split between the two team members is in [Tasks.md](Tasks.md).
 
 ## 1. Architecture
 
@@ -202,7 +200,7 @@ scaling policies.
 The alarms tell the team that something is wrong; the dashboard and the logs
 show where. For example, the logs and the reasons ECS gives for stopped tasks
 showed billing-app crashing while RabbitMQ was being replaced, which was then
-fixed. The commands to read logs and alarms are in section 5.7, and graphs
+fixed. The commands to read logs and alarms are in section 5.9, and graphs
 taken during the load test are in
 [terraform/aymen/05-monitoring/README.md](terraform/aymen/05-monitoring/README.md#screenshots).
 
@@ -267,7 +265,14 @@ taken during the load test are in
 - **Least-privilege IAM:** each app service has its own execution role that
   can read only its own secrets, and a task role that allows only ECS Exec.
 - **Vulnerability scanning:** Amazon Inspector scans every image pushed to
-  ECR and re-checks it as new vulnerabilities are published.
+  ECR and re-checks it as new vulnerabilities are published. When a finding
+  has a fixed version, the package is updated and the image pushed again.
+  The critical findings left are in rabbit-queue (Debian 12's RabbitMQ
+  3.10.8 and GnuTLS) and have no fixed version yet. A newer RabbitMQ is a
+  major upgrade that can't open the queue data already on EFS, so it is
+  planned as a separate migration; until then RabbitMQ is reachable only
+  from the app tasks and needs a password. The commands to see the findings
+  are in [terraform/houda/ecr/README.md](terraform/houda/ecr/README.md#viewing-scan-results).
 - **Why not Amazon API Gateway:** the load balancer plus Cognito tokens
   checked by api-gateway-app gives the same protection without a second,
   paid gateway in front of the one the application already has.
@@ -282,7 +287,7 @@ taken during the load test are in
   14 days.
 - The biggest fixed costs are the NAT gateway, the load balancer and the two
   RDS instances, all billed per hour, so everything is destroyed with
-  `terraform destroy` after testing (section 5.8).
+  `terraform destroy` after testing (section 5.10).
 
 ### Simplicity
 
@@ -336,12 +341,11 @@ taken during the load test are in
 | File | What it does |
 |------|--------------|
 | `README.md` | This document |
-| `COMMANDS.md` | Using AWS step by step, the commands for the audit, and how to use the Postman collection |
 | `Tasks.md` | How the work was split into 10 tasks between the two team members |
 | `.gitignore` | Keeps secrets and generated files out of git: `.env`, `*.tfvars`, Terraform state and `.terraform/` folders, plan files, load-test results |
 | `.dockerignore` | Keeps everything except the source code out of the Docker build context: faster builds, and no state files or `.env` in images |
 | `openapi.yaml` | OpenAPI 3 description of the public API: paths, request bodies, responses, the Bearer token security |
-| `postman/cloud-design.postman_collection.json` | Postman collection: 14 requests with automatic checks; how to use it: [COMMANDS.md](COMMANDS.md#214-testing-with-postman) |
+| `postman/cloud-design.postman_collection.json` | Postman collection: 14 requests with automatic checks; how to use it: [section 5.7](#57-test-with-postman) |
 
 ### `srcs/`: application source code
 
@@ -527,8 +531,6 @@ project in `eu-west-3` with the name prefix `cloud-design`.
 ## 5. Commands
 
 All commands run from the repository root unless a `cd` says otherwise.
-A slower version with a check after each step, and the commands for the
-audit, are in [COMMANDS.md](COMMANDS.md).
 
 ### 5.1 Deploy everything (first time)
 
@@ -669,10 +671,97 @@ Replace `<id>` with the id returned when the movie was created. Careful:
 | 503 | inventory-app or RabbitMQ can't be reached at the moment |
 
 The same requests, with automatic checks, are in the Postman collection
-([COMMANDS.md](COMMANDS.md#214-testing-with-postman)), and every endpoint is
-described in [openapi.yaml](openapi.yaml).
+([section 5.7](#57-test-with-postman)), and every endpoint is described in
+[openapi.yaml](openapi.yaml).
 
-### 5.6 Load test
+### 5.6 Test the billing queue
+
+Orders sent while billing-app is stopped wait in RabbitMQ and are saved
+when it comes back. With `APP_URL` and `AUTH` from 5.4:
+
+```bash
+CLUSTER=cloud-design-cluster
+TARGET=service/$CLUSTER/billing-service
+
+# 1. Stop billing-app. Auto-scaling is paused first so it doesn't start a task again.
+aws application-autoscaling register-scalable-target --service-namespace ecs \
+  --scalable-dimension ecs:service:DesiredCount --resource-id $TARGET \
+  --suspended-state DynamicScalingInSuspended=true,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=true
+aws ecs update-service --cluster $CLUSTER --service billing-service --desired-count 0 >/dev/null
+aws ecs wait services-stable --cluster $CLUSTER --services billing-service
+# ...and until its task has really exited (it counts as not running as soon as it starts stopping)
+aws ecs wait tasks-stopped --cluster $CLUSTER --tasks $(aws ecs list-tasks --cluster $CLUSTER \
+  --service-name billing-service --desired-status STOPPED --query 'taskArns[]' --output text)
+aws ecs describe-services --cluster $CLUSTER --services billing-service \
+  --query 'services[0].runningCount'                                          # 0
+
+# 2. Send an order: still accepted (200 Message posted), it waits in the queue
+curl -k -i -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"user_id": "42", "number_of_items": 1, "total_amount": 9.99}' "$APP_URL/api/billing"
+
+# 3. Start billing-app again and resume auto-scaling
+aws ecs update-service --cluster $CLUSTER --service billing-service --desired-count 1 >/dev/null
+aws application-autoscaling register-scalable-target --service-namespace ecs \
+  --scalable-dimension ecs:service:DesiredCount --resource-id $TARGET \
+  --suspended-state DynamicScalingInSuspended=false,DynamicScalingOutSuspended=false,ScheduledScalingSuspended=false
+
+# 4. The queued order is saved as soon as the new billing task connects
+#    (about 30 s): "Received order message: {'user_id': '42', ...}", then
+#    "Order successfully inserted". Ctrl+C to stop.
+aws logs tail /ecs/cloud-design --log-stream-name-prefix billing --since 10m --follow
+```
+
+The log stream name in step 4 contains the ID of the new billing task,
+which shows that the order was saved after the restart. If billing-app
+stays stopped for more than 3 minutes, the `cloud-design-billing-not-running`
+alarm emails `alert_email`, and an OK email follows when it is back.
+
+### 5.7 Test with Postman
+
+[postman/cloud-design.postman_collection.json](postman/cloud-design.postman_collection.json)
+has 14 requests with automatic checks, in 4 folders:
+
+| Folder | Requests |
+|--------|----------|
+| 1. Sign in | Gets a Cognito access token and saves it for all the other requests |
+| 2. Security checks | `/health` without a token (200), movies without a token (401), with a fake token (401) |
+| 3. Movies | Create (201), list, get by id, search, update (200), create without a title (400), delete, get the deleted movie (404) |
+| 4. Billing | Send an order (200 Message posted), an order with missing fields (400) |
+
+1. Get the values the collection needs:
+
+   ```bash
+   # base_url
+   echo "https://$(aws elbv2 describe-load-balancers --names cloud-design-alb \
+     --query 'LoadBalancers[0].DNSName' --output text)"
+
+   # cognito_client_id (client_id), username and password of the test user
+   aws secretsmanager get-secret-value --secret-id cloud-design/cognito-test-user \
+     --query SecretString --output text
+   ```
+
+2. In Postman: **Import** → choose the file. Open the collection, go to the
+   **Variables** tab and fill `base_url`, `cognito_client_id`, `username` and
+   `password`. Type the password only as the *current* (local) value, not
+   as the initial or shared value: the local value stays on your computer
+   and is never exported with the collection. Save.
+3. Run **1. Sign in → Get access token**. The token is saved in
+   `access_token` and is valid 60 minutes; run it again when requests
+   start getting 401.
+4. Run the other requests one by one, or the whole collection with
+   **Run collection**. Each request's **Test Results** tab shows its checks.
+
+The requests to the load balancer don't verify its certificate, because it
+is self-signed when no domain is set. If Postman still reports a certificate
+error, turn off **Settings → General → SSL certificate verification**.
+
+To test the billing queue from Postman, stop billing-app with step 1 of
+5.6, send **4. Billing → Send a billing order**, then run steps 3 and 4.
+
+The collection deletes only the movie it creates. `DELETE /api/movies`,
+which deletes every movie, is left out on purpose.
+
+### 5.8 Load test
 
 ```bash
 # terminal 1: record task counts and CPU every 30 s (Ctrl+C to stop)
@@ -686,7 +775,7 @@ PEAK_RPS=120 load-test/run-load-test.sh   # a higher peak
 The scenarios, the results and the tuning decisions are in
 [load-test/README.md](load-test/README.md).
 
-### 5.7 Logs and debugging
+### 5.9 Logs and debugging
 
 ```bash
 CLUSTER=cloud-design-cluster
@@ -700,10 +789,11 @@ aws logs filter-log-events --log-group-name /ecs/cloud-design \
   --start-time $(( ($(date +%s) - 3600) * 1000 )) --filter-pattern '?ERROR ?Error ?Traceback' \
   --query 'events[].[logStreamName,message]' --output text
 
-# Why did a task stop? (tasks stopped in the last hour)
-aws ecs describe-tasks --cluster $CLUSTER \
-  --tasks $(aws ecs list-tasks --cluster $CLUSTER --desired-status STOPPED --query 'taskArns[]' --output text) \
-  --query 'tasks[].[group,stoppedReason,containers[0].exitCode]' --output table
+# Why did a task stop? (tasks stopped in the last hour; no output if none did)
+for t in $(aws ecs list-tasks --cluster $CLUSTER --desired-status STOPPED --query 'taskArns[]' --output text); do
+  aws ecs describe-tasks --cluster $CLUSTER --tasks $t \
+    --query 'tasks[].[group,stoppedReason,containers[0].exitCode]' --output text
+done
 
 # Shell inside a running container (needs the Session Manager plugin)
 TASK=$(aws ecs list-tasks --cluster $CLUSTER --service-name inventory-service --query 'taskArns[0]' --output text)
@@ -713,7 +803,7 @@ aws ecs execute-command --cluster $CLUSTER --task $TASK --container inventory-ap
 How to install the Session Manager plugin without root is in
 [terraform/houda/platform/README.md](terraform/houda/platform/README.md#cluster-access-task-6).
 
-### 5.8 Tear down
+### 5.10 Tear down
 
 The NAT gateway, the load balancer, the databases and the running tasks are
 billed per hour. Check the spending in **Billing and Cost Management → Cost

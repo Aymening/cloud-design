@@ -88,7 +88,7 @@ aws cloudwatch describe-alarms --alarm-name-prefix cloud-design- \
   --query 'MetricAlarms[].[AlarmName,StateValue]' --output table
 ```
 
-Stopping billing-service for more than 3 minutes (as in the billing
-resilience demo of the main README) sends the
+Stopping billing-service for more than 3 minutes (as in the billing queue
+test, [README.md, section 5.6](../../../README.md#56-test-the-billing-queue)) sends the
 `cloud-design-billing-not-running` alarm email, and an OK email when it is
 back.

@@ -26,8 +26,8 @@ topology (single durable queue, default exchange, manual ack/nack).
   definitions aren't tied to any specific cluster.
 - No image repository - the `rabbit-queue` image is pushed to the ECR
   repository from `terraform/houda/ecr` and passed in with
-  `-var "container_image=..."` (step 4 of the main README's Deploying
-  section).
+  `-var "container_image=..."` (step 4 of
+  [README.md, section 5.1](../../../README.md#51-deploy-everything-first-time)).
 
 ## Usage
 
@@ -42,7 +42,7 @@ terraform apply -var-file=terraform.tfvars
 ## Verifying message consumption
 
 The billing queue resilience test in
-[COMMANDS.md](../../../COMMANDS.md#27-billing-queue-resilience) proves it end
+[README.md, section 5.6](../../../README.md#56-test-the-billing-queue) proves it end
 to end on AWS: an order sent while billing-app is stopped waits in
 `billing_queue`, and billing-app consumes it and writes it to billing-db
 once it is back.
