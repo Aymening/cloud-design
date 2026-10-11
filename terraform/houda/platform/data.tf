@@ -1,35 +1,43 @@
-# Reads the outputs of the other modules from their local state files, the
-# same wiring pattern the aymen/ modules use between themselves - no IDs are
+# Reads the outputs of the other modules from their S3 state, the same
+# wiring pattern the aymen/ modules use between themselves - no IDs are
 # copied by hand. Those modules must be applied before this one.
 data "terraform_remote_state" "networking" {
-  backend = "local"
+  backend = "s3"
 
   config = {
-    path = "${path.module}/../../aymen/01-networking/terraform.tfstate"
+    bucket = "cloud-design-tfstate-008871758028"
+    key    = "aymen/01-networking/terraform.tfstate"
+    region = "eu-west-3"
   }
 }
 
 data "terraform_remote_state" "databases" {
-  backend = "local"
+  backend = "s3"
 
   config = {
-    path = "${path.module}/../../aymen/02-databases/terraform.tfstate"
+    bucket = "cloud-design-tfstate-008871758028"
+    key    = "aymen/02-databases/terraform.tfstate"
+    region = "eu-west-3"
   }
 }
 
 data "terraform_remote_state" "messaging" {
-  backend = "local"
+  backend = "s3"
 
   config = {
-    path = "${path.module}/../../aymen/04-messaging/terraform.tfstate"
+    bucket = "cloud-design-tfstate-008871758028"
+    key    = "aymen/04-messaging/terraform.tfstate"
+    region = "eu-west-3"
   }
 }
 
 data "terraform_remote_state" "ecr" {
-  backend = "local"
+  backend = "s3"
 
   config = {
-    path = "${path.module}/../ecr/terraform.tfstate"
+    bucket = "cloud-design-tfstate-008871758028"
+    key    = "houda/ecr/terraform.tfstate"
+    region = "eu-west-3"
   }
 }
 

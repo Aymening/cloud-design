@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.11.0"
 
   required_providers {
     aws = {
@@ -14,6 +14,14 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
+  }
+
+  backend "s3" {
+    bucket       = "cloud-design-tfstate-008871758028"
+    key          = "houda/platform/terraform.tfstate"
+    region       = "eu-west-3"
+    encrypt      = true
+    use_lockfile = true
   }
 }
 

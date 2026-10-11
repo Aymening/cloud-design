@@ -1,10 +1,12 @@
 # Reads the outputs (subnet ids, rabbitmq security group id) from the
 # networking module's state file, same wiring pattern as the databases module.
 data "terraform_remote_state" "networking" {
-  backend = "local"
+  backend = "s3"
 
   config = {
-    path = "${path.module}/../01-networking/terraform.tfstate"
+    bucket = "cloud-design-tfstate-008871758028"
+    key    = "aymen/01-networking/terraform.tfstate"
+    region = "eu-west-3"
   }
 }
 

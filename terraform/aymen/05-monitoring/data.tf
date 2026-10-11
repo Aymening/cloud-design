@@ -1,25 +1,31 @@
 # Reads outputs from the databases and messaging modules so alarms can
 # target the real RDS instances and log group without duplicating them.
 data "terraform_remote_state" "databases" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = "${path.module}/../02-databases/terraform.tfstate"
+    bucket = "cloud-design-tfstate-008871758028"
+    key    = "aymen/02-databases/terraform.tfstate"
+    region = "eu-west-3"
   }
 }
 
 data "terraform_remote_state" "messaging" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = "${path.module}/../04-messaging/terraform.tfstate"
+    bucket = "cloud-design-tfstate-008871758028"
+    key    = "aymen/04-messaging/terraform.tfstate"
+    region = "eu-west-3"
   }
 }
 
 # The platform module (ECS cluster, services, load balancer) gives the app
 # metrics shown on the dashboard and used by app_alarms.tf.
 data "terraform_remote_state" "platform" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = "${path.module}/../../houda/platform/terraform.tfstate"
+    bucket = "cloud-design-tfstate-008871758028"
+    key    = "houda/platform/terraform.tfstate"
+    region = "eu-west-3"
   }
 }
 
